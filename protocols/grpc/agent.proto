@@ -287,6 +287,7 @@ message CreateSandboxRequest {
 	// This field, if non-empty, designates an absolute path to a directory
 	// that the agent will search for OCI hooks to run within the guest.
 	string guest_hook_path = 6;
+	map<string, string> Annotations = 7;
 }
 
 message DestroySandboxRequest {

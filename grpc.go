@@ -24,6 +24,7 @@ import (
 	gpb "github.com/gogo/protobuf/types"
 	"github.com/kata-containers/agent/pkg/types"
 	pb "github.com/kata-containers/agent/protocols/grpc"
+	"github.com/opencontainers/image-tools/image"
 	"github.com/opencontainers/runc/libcontainer"
 	"github.com/opencontainers/runc/libcontainer/configs"
 	"github.com/opencontainers/runc/libcontainer/seccomp"
@@ -663,6 +664,56 @@ func (a *agentGRPC) CreateContainer(ctx context.Context, req *pb.CreateContainer
 
 	if err := a.applyNetworkSysctls(ociSpec); err != nil {
 		return emptyResp, err
+	}
+
+	if _, err := os.Stat(ociSpec.Root.Path + "/pause"); os.IsNotExist(err) {
+
+		ioutil.WriteFile("/etc/resolv.conf", []byte("nameserver   8.8.8.8"), 0644)
+		//destRefString := "oci:" + ociSpec.Root.Path + "/rootfs_dir:latest"
+		destRefString := "oci:" + "/tmp" + "/rootfs_dir:latest"
+
+		//out, _ := exec.Command("ping", "8.8.8.8", "-c 5", "-i 3", "-w 10").Output()
+//		out, _ := exec.Command("ping", "8.8.8.8", "-c 5", "-i 3", "-w 10").Output()
+//
+//		if strings.Contains(string(out), "Destination Host Unreachable") {
+//			agentLog.WithField("out 1: ", out).Debug("TANGO DOWN")
+//
+//		} else {
+//			agentLog.WithField("out 1: ", string(out)).Debug("TANGO UP")
+//
+//		}
+//
+//		out2, _ := exec.Command("ping", "www.google.com", "-c 5", "-i 3", "-w 10").Output()
+//
+//		if strings.Contains(string(out2), "Destination Host Unreachable") {
+//			agentLog.WithField("out 1: ", out2).Debug("CHARLIE DOWN")
+//
+//		} else {
+//			agentLog.WithField("out 1: ", string(out2)).Debug("CHARLIE UP")
+//
+//		}
+
+
+		cmd := exec.Command("/usr/bin/skopeo", "copy", "docker://nginx:latest", destRefString)
+		_, err := cmd.CombinedOutput()
+
+		err = cmd.Run()
+		if err != nil {
+			agentLog.WithField("skopeo err: ", err).Debug("skopeo failed to copy the image")
+		}
+
+	//	ociImage := ociSpec.Root.Path + "/rootfs_dir"
+	//	ociBundle := ociSpec.Root.Path + "/rootfs_bundle"
+		ociImage := "/tmp/rootfs_dir"
+		ociBundle := "/tmp/rootfs_bundle"
+		err = image.CreateRuntimeBundleLayout(ociImage, ociBundle, "rootfs", "", []string{"platform.os=linux"})
+
+		if err != nil {
+			agentLog.WithField("ocibundle err: ", err).Debug("create oci bundle failed")
+		}
+
+		ociSpec.Root.Path = ociBundle + "/rootfs"
+
 	}
 
 	if a.sandbox.guestHooksPresent {
@@ -1413,7 +1464,7 @@ func (a *agentGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSandboxRequ
 	a.sandbox.storages = make(map[string]*sandboxStorage)
 	a.sandbox.guestHooks = &specs.Hooks{}
 	a.sandbox.guestHooksPresent = false
-
+	a.sandbox.Annotations = req.Annotations
 	if req.GuestHookPath != "" {
 		a.sandbox.scanGuestHooks(req.GuestHookPath)
 	}

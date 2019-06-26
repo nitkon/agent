@@ -135,6 +135,7 @@ type sandbox struct {
 	sandboxPidNs      bool
 	storages          map[string]*sandboxStorage
 	stopServer        chan struct{}
+	Annotations	map[string]string
 }
 
 var agentFields = logrus.Fields{
