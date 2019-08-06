@@ -606,6 +606,20 @@ func (a *agentGRPC) finishCreateContainer(ctr *container, req *pb.CreateContaine
 }
 
 func (a *agentGRPC) CreateContainer(ctx context.Context, req *pb.CreateContainerRequest) (resp *gpb.Empty, err error) {
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+
+	cmd := exec.Command("ls", "-lrt", "/run/kata-containers/shared/containers/")
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+	err1 := cmd.Run()
+	logrus.Printf("AUG 060606 %v %s %s", err1, stderr.String(), out.String())
+	logrus.Printf("%s", stderr.String())
+	logrus.Printf("%s", out.String())
+	if err := setupDNS(a.sandbox.id); err != nil {
+		return emptyResp, err
+	}
+
 	if err := a.createContainerChecks(req); err != nil {
 		return emptyResp, err
 	}
@@ -1478,10 +1492,20 @@ func (a *agentGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSandboxRequ
 
 	a.sandbox.mounts = mountList
 
-	if err := setupDNS(a.sandbox.network.dns); err != nil {
-		return emptyResp, err
-	}
+	var out bytes.Buffer
+	var stderr bytes.Buffer
 
+	cmd := exec.Command("ls", "-lrt", "/run/kata-containers/shared/containers/")
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	logrus.Printf("AUG 06 %v %s %s", err, stderr.String(), out.String())
+	logrus.Printf("%s", stderr.String())
+	logrus.Printf("%s", out.String())
+	/*
+		if err := setupDNS(a.sandbox.id); err != nil {
+			//return emptyResp, err
+		}*/
 	return emptyResp, nil
 }
 
