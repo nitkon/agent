@@ -1477,8 +1477,9 @@ func (a *agentGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSandboxRequ
 	}
 
 	a.sandbox.mounts = mountList
-
+logrus.Printf("AGENT DNS IS %v", a.sandbox.network.dns)
 	if err := setupDNS(a.sandbox.network.dns); err != nil {
+		logrus.Printf("AGENT DNS IS %v", a.sandbox.network.dns)
 		return emptyResp, err
 	}
 

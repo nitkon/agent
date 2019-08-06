@@ -12,6 +12,7 @@ import (
 	"os"
 	"reflect"
 	"sync"
+	"strings"
 
 	"golang.org/x/sys/unix"
 
@@ -575,7 +576,35 @@ func (s *sandbox) updateRoute(netHandle *netlink.Handle, route *types.Route, add
 // DNS //
 /////////
 
+func writeLines(lines []string, path string) (err error) {
+    var (
+        file *os.File
+    )
+
+    if file, err = os.Create(path); err != nil {
+        return
+    }
+    defer file.Close()
+
+    //writer := bufio.NewWriter(file)
+    for _,item := range lines {
+        //fmt.Println(item)
+        _, err := file.WriteString(strings.TrimSpace(item) + "\n"); 
+        //file.Write([]byte(item)); 
+        if err != nil {
+            //fmt.Println("debug")
+            fmt.Println(err)
+            break
+        }
+    }
+    /*content := strings.Join(lines, "\n")
+    _, err = writer.WriteString(content)*/
+    return
+}
+
+
 func setupDNS(dns []string) error {
+	//return writeLines(dns, "/etc/resolv.conf")
 	return nil
 }
 
