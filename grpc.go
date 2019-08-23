@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/opencontainers/image-tools/image"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -21,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
 	gpb "github.com/gogo/protobuf/types"
 	"github.com/kata-containers/agent/pkg/types"
 	pb "github.com/kata-containers/agent/protocols/grpc"
@@ -35,6 +37,7 @@ import (
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
 	grpcStatus "google.golang.org/grpc/status"
+	"gopkg.in/yaml.v2"
 )
 
 type agentGRPC struct {
@@ -44,9 +47,12 @@ type agentGRPC struct {
 
 // CPU and Memory hotplug
 const (
-	cpuRegexpPattern = "cpu[0-9]*"
-	memRegexpPattern = "memory[0-9]*"
-	libcontainerPath = "/run/libcontainer"
+	cpuRegexpPattern      = "cpu[0-9]*"
+	memRegexpPattern      = "memory[0-9]*"
+	libcontainerPath      = "/run/libcontainer"
+	configmapFileName     = "kavach.properties"
+	configmapJsonFileName = "config.json"
+	kataGuestSvmDir       = "/run/svm"
 )
 
 var (
@@ -56,6 +62,9 @@ var (
 	sysfsMemoryHotplugProbePath = "/sys/devices/system/memory/probe"
 	sysfsConnectedCPUsPath      = filepath.Join(sysfsCPUOnlinePath, "online")
 	containersRootfsPath        = "/run"
+	kataGuestSharedDir          = "/run/kata-containers/shared/containers"
+	skopeoSrcImageTransport     = "docker://" //Todo: Handle other registries as well
+	skopeoDestImageTransport    = "oci:"
 
 	// set when StartTracing() is called.
 	startTracingCalled = false
@@ -71,6 +80,8 @@ type onlineResource struct {
 
 type cookie map[string]bool
 
+var svmConfig SVMConfig
+var ociJsonSpec = &specs.Spec{}
 var emptyResp = &gpb.Empty{}
 
 const onlineCPUMemWaitTime = 100 * time.Millisecond
@@ -78,6 +89,36 @@ const onlineCPUMemWaitTime = 100 * time.Millisecond
 var onlineCPUMaxTries = uint32(100)
 
 const cpusetMode = 0644
+
+type SVMConfig struct {
+	Spec Spec `yaml:"spec"`
+}
+type Requests struct {
+	CPU    string `yaml:"cpu"`
+	Memory string `yaml:"memory"`
+}
+type Resources struct {
+	Requests Requests `yaml:"requests"`
+}
+type Env struct {
+	Name  string `yaml:"name"`
+	Value string `yaml:"value"`
+}
+type Ports struct {
+	ContainerPort int `yaml:"containerPort"`
+}
+type Containers struct {
+	Name      string    `yaml:"name"`
+	Image     string    `yaml:"image"`
+	Resources Resources `yaml:"resources"`
+	Args      []string  `yaml:"args"`
+	Env       []Env     `yaml:"env"`
+	Cwd       string    `yaml:"cwd"`
+	Ports     []Ports   `yaml:"ports"`
+}
+type Spec struct {
+	Containers []Containers `yaml:"containers"`
+}
 
 // handleError will log the specified error if wait is false
 func handleError(wait bool, err error) error {
@@ -398,6 +439,60 @@ func (a *agentGRPC) execProcess(ctr *container, proc *process, createContainer b
 		return grpcStatus.Error(codes.InvalidArgument, "Process cannot be nil")
 	}
 
+	if createContainer != true {
+		logrus.Printf("Inside execProcess, calling findAndReadConfigmap containerid: %s", ctr.id)
+		err := findAndReadConfigmap(ctr.id)
+		if err != nil {
+			fmt.Println("execProcess findAndReadConfigmap failed: %s", err)
+			return err
+		}
+		fmt.Println("execProcess findAndReadConfigmap Success")
+
+		err = findAndReadConfigJson(ctr.id)
+		if err != nil {
+			logrus.Printf("Inside execProcess, findAndReadConfigJson FAILED %s", err)
+			agentLog.WithError(err).Errorf("findAndReadConfigJson errored out: %s", err)
+			return err
+		}
+
+		fmt.Printf("SPEW JULY21  PRINTING ociJsonSpec from execProcess")
+		spew.Dump(ociJsonSpec)
+
+		fmt.Printf("SPEW JULY21  PRINTING svmConfig from execProcess")
+		spew.Dump(svmConfig)
+
+		//ToDo: Iterate over env name and vales and append all of them
+		if len(svmConfig.Spec.Containers[0].Env) != 0 {
+			// works only for 1 env. Todo Iterate over all env mentioned in configmap yaml
+			proc.process.Env = append(proc.process.Env, ociJsonSpec.Process.Env...)
+
+			//ToDo: Fix the unmarshalling of multiple env variables specified in container yaml in configmap
+			logrus.Printf("Entering svmEnv range")
+			i := 0
+			var createEnv string
+			for _, svmEnv := range svmConfig.Spec.Containers[i].Env {
+				if i%2 == 0 {
+					createEnv = svmEnv.Name + "="
+				} else {
+					createEnv = createEnv + svmEnv.Value
+					proc.process.Env = append(proc.process.Env, createEnv)
+				}
+				i++
+			}
+
+		} else {
+			proc.process.Env = append(proc.process.Env, ociJsonSpec.Process.Env...)
+		}
+
+		if svmConfig.Spec.Containers[0].Cwd != "" {
+			proc.process.Cwd = svmConfig.Spec.Containers[0].Cwd
+		} else {
+			proc.process.Cwd = ociJsonSpec.Process.Cwd
+		}
+
+		ociJsonSpec = &specs.Spec{}
+		svmConfig = SVMConfig{}
+	}
 	// This lock is very important to avoid any race with reaper.reap().
 	// Indeed, if we don't lock this here, we could potentially get the
 	// SIGCHLD signal before the channel has been created, meaning we will
@@ -430,6 +525,46 @@ func (a *agentGRPC) execProcess(ctr *container, proc *process, createContainer b
 	a.sandbox.subreaper.setExitCodeCh(pid, proc.exitCodeCh)
 
 	return nil
+}
+
+//Find and Read configmap volume mounted into the scratch container rootfs
+func findAndReadConfigJson(containerId string) error {
+
+	var files []string
+	err := filepath.Walk(kataGuestSvmDir, traverseFiles(&files))
+	if err != nil {
+		return err
+	}
+	for _, file := range files {
+		if strings.Contains(file, configmapJsonFileName) && strings.Contains(file, containerId) {
+			_, err = os.Stat(file)
+			if err == nil {
+				logrus.Printf("Found file for reading JSON config data %s", file)
+				configJSONBytes, err := ioutil.ReadFile(file)
+				if err != nil {
+					agentLog.WithError(err).Errorf("Could not read file %s: %s", file, err)
+					return err
+				}
+
+				logrus.Println("EXEC BEFORE Unmarshalling into ociJsonSpec %#v", ociJsonSpec)
+				err = json.Unmarshal(configJSONBytes, &ociJsonSpec)
+				logrus.Println("EXEC AFTER Unmarshalling into ociJsonSpec %#v", ociJsonSpec)
+				if err != nil {
+					agentLog.WithError(err).Errorf("Error unmarshalling ociJsonSpec %s", err)
+					return err
+				}
+
+			} else {
+				agentLog.WithError(err).Errorf("Unable to stat file %s err:%s", file, err)
+				return err
+			}
+			logrus.Printf("SUCCESS: FOUND FILE findAndReadConfigJson. containerid is: %s", containerId)
+			break
+		}
+		logrus.Printf("FAILED TO FIND ANY SUCH FILE findAndReadConfigJson. containerid is: %s", containerId)
+	}
+	return err
+
 }
 
 // Shared function between CreateContainer and ExecProcess, because those expect
@@ -584,7 +719,6 @@ func (a *agentGRPC) finishCreateContainer(ctr *container, req *pb.CreateContaine
 		return emptyResp, err
 	}
 	ctr.config = *config
-
 	ctr.initProcess, err = buildProcess(req.OCI.Process, req.ExecId, true)
 	if err != nil {
 		return emptyResp, err
@@ -603,11 +737,260 @@ func (a *agentGRPC) finishCreateContainer(ctr *container, req *pb.CreateContaine
 	return emptyResp, a.postExecProcess(ctr, ctr.initProcess)
 }
 
+func traverseFiles(files *[]string) filepath.WalkFunc {
+	return func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			agentLog.WithError(err).Errorf("Error in traversing files in %s", path)
+			return err
+		}
+		*files = append(*files, path)
+		return nil
+	}
+}
+
+func readOciImageConfigJson(ociSpec *specs.Spec, req *pb.CreateContainerRequest) (*specs.Spec, error) {
+
+	//	ociJsonSpec := &specs.Spec{}
+	logrus.Printf("INside readOciImageConfigJson")
+	configPath := kataGuestSvmDir + ociSpec.Root.Path + "/" + req.ContainerId + "/rootfs_bundle" + "/config.json"
+	logrus.Printf("Reading configJSONBytes from %s", configPath)
+
+	_, err := os.Stat(configPath)
+	if err != nil {
+		logrus.Printf("ConfigPath does not exsists %s", err)
+		return ociJsonSpec, err
+	}
+
+	configJSONBytes, err := ioutil.ReadFile(configPath)
+	if err != nil {
+		logrus.Printf("Could not open OCI config file")
+		return ociJsonSpec, err
+	}
+
+	logrus.Printf("Unmarshalling the data")
+	if err := json.Unmarshal(configJSONBytes, &ociJsonSpec); err != nil {
+		logrus.Printf("Could not unmarshall OCI config file")
+		return ociJsonSpec, err
+	}
+
+	fmt.Printf("SPEW JULY21  PRINTING ociSPec READ FROM CONFIG JSON GOT FROM SKOPEO PULL")
+	spew.Dump(ociJsonSpec)
+
+	return ociJsonSpec, nil
+}
+
+func updateOCIReq(ociSpec *specs.Spec, req *pb.CreateContainerRequest, svmConfig SVMConfig) {
+	logrus.Printf("INSIDE updateOCIReq")
+	logrus.Printf("JULY 19 svmConfig is %#v", svmConfig)
+	logrus.Printf("JULY 19 req.OCI.Process is %#v", req.OCI.Process)
+	logrus.Printf("JULY 19 req.OCI.Process is %#v", req.ContainerId)
+
+	ociJsonSpec, err := readOciImageConfigJson(ociSpec, req)
+	fmt.Printf("SPEW updateOCIReq")
+	spew.Dump(ociJsonSpec)
+	if err != nil {
+		logrus.Printf("readOciImageConfigJson Errored out %s", err)
+	}
+
+	if len(svmConfig.Spec.Containers[0].Args) == 0 {
+		req.OCI.Process.Args = ociJsonSpec.Process.Args
+	} else {
+		req.OCI.Process.Args = svmConfig.Spec.Containers[0].Args
+	}
+
+	//ToDo: Iterate over env name and vales and append all of them
+	if len(svmConfig.Spec.Containers[0].Env) != 0 {
+		// works only for 1 env. Todo Iterate over all env mentioned.
+		req.OCI.Process.Env = append(req.OCI.Process.Env, ociJsonSpec.Process.Env...)
+
+		createEnv := svmConfig.Spec.Containers[0].Env[0].Name + "=" + svmConfig.Spec.Containers[0].Env[0].Value
+		req.OCI.Process.Env = append(req.OCI.Process.Env, createEnv)
+	} else {
+		req.OCI.Process.Env = append(req.OCI.Process.Env, ociJsonSpec.Process.Env...)
+	}
+
+	if svmConfig.Spec.Containers[0].Cwd != "" {
+		req.OCI.Process.Cwd = svmConfig.Spec.Containers[0].Cwd
+	} else {
+		req.OCI.Process.Cwd = ociJsonSpec.Process.Cwd
+	}
+
+	fmt.Printf("SPEW req.OCI.Process is")
+	spew.Dump(req.OCI.Process)
+
+}
+
+func createRuntimeBundle(ociSpec *specs.Spec, req *pb.CreateContainerRequest) error {
+
+	ociBundle := kataGuestSvmDir + ociSpec.Root.Path + "/" + req.ContainerId + "/rootfs_bundle"
+	ociImage := kataGuestSvmDir + ociSpec.Root.Path + "/" + req.ContainerId + "/rootfs_dir"
+
+	logrus.Printf("INSIDE createRuntimeBundle OCIIMAGE IS: %s   ociBundle is: %s", ociImage, ociBundle)
+	err := image.CreateRuntimeBundleLayout(ociImage, ociBundle, "rootfs", "", []string{"platform.os=linux"})
+	if err != nil {
+		agentLog.WithField("ocibundle err: ", err).Debug("create oci bundle failed")
+	}
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+
+	_, err = os.Stat(ociBundle)
+	if err != nil {
+		logrus.Printf("FAILURE: ociBundle does NOT exists: %s", ociBundle)
+		return err
+	} else {
+		logrus.Printf("SUCCESS: ociBundle does exists: %s", ociBundle)
+	}
+
+	// Make ociBundle executable as some images need to execute .sh files at startup
+	cmd := exec.Command("chmod", "-R", "+x", ociBundle)
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+
+	err = cmd.Run()
+	if err != nil {
+		logrus.Printf("CHMOD FAILED%v %s %s", err, stderr.String(), out.String())
+		logrus.Printf("%s", stderr.String())
+		logrus.Printf("%s", out.String())
+
+		agentLog.WithError(err).Errorf("chmod failed %s", err)
+		return err
+	} else {
+		logrus.Printf("CHMOD SUCCESS%v %s %s", err, stderr.String(), out.String())
+	}
+
+	return err
+}
+
+//Find and Read configmap volume mounted into the scratch container rootfs
+func findAndReadConfigmap(containerId string) error {
+
+	var files []string
+	err := filepath.Walk(kataGuestSharedDir, traverseFiles(&files))
+	if err != nil {
+		return err
+	}
+	for _, file := range files {
+		if strings.Contains(file, configmapFileName) && strings.Contains(file, containerId) {
+			_, err = os.Stat(file)
+			if err == nil {
+				logrus.Printf("Found file for reading config data %s", file)
+				yamlContainerSpec, err := ioutil.ReadFile(file) //Here you can decrypt the encrypted container yaml present in configmap
+				if err != nil {
+					agentLog.WithError(err).Errorf("Could not read file %s: %s", file, err)
+					return err
+				}
+
+				fmt.Println("BEFORE Unmarshalling into svmConfig %#v", svmConfig)
+				err = yaml.Unmarshal(yamlContainerSpec, &svmConfig)
+				fmt.Println("AFTER Unmarshalling into svmConfig %#v", svmConfig)
+				if err != nil {
+					agentLog.WithError(err).Errorf("Error unmarshalling yaml %s", err)
+					return err
+				}
+
+			} else {
+				agentLog.WithError(err).Errorf("Unable to stat file %s err:%s", file, err)
+				return err
+			}
+			break
+		}
+	}
+	return err
+
+}
+
+func pullOciImage(ociSpec *specs.Spec, svmConfig SVMConfig, req *pb.CreateContainerRequest) error {
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+
+	pull := skopeoSrcImageTransport + svmConfig.Spec.Containers[0].Image
+	create_dir := kataGuestSvmDir + ociSpec.Root.Path + "/" + req.ContainerId + "/rootfs_dir:latest"
+	destRefString := skopeoDestImageTransport + create_dir
+
+	cmd := exec.Command("mkdir", "-p", create_dir)
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		logrus.Printf("JULY 19 CREATE DIR FAILED %v %s %s", err, stderr.String(), out.String())
+		logrus.Printf("%s", stderr.String())
+		logrus.Printf("%s", out.String())
+
+		agentLog.WithError(err).Errorf("Error executing mkdir %s", err)
+		return err
+	}
+
+	cmd = exec.Command("/usr/bin/skopeo", "copy", pull, destRefString)
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+
+	err = cmd.Run()
+	if err != nil {
+		logrus.Printf("JULY 19 SKOPEO ERRORED OUT %v %s %s", err, stderr.String(), out.String())
+		logrus.Printf("%s", stderr.String())
+		logrus.Printf("%s", out.String())
+		agentLog.WithError(err).Errorf("Error executing skopeo copy %s", err)
+		return err
+	}
+
+	return nil
+}
+
+func startSecureContainers(ociSpec *specs.Spec, req *pb.CreateContainerRequest) error {
+
+	err := findAndReadConfigmap(req.ContainerId)
+	if err != nil {
+		agentLog.WithError(err).Errorf("findAndReadConfigmap errored out: %s", err)
+		return err
+	}
+
+	err = pullOciImage(ociSpec, svmConfig, req)
+	if err != nil {
+		agentLog.WithError(err).Errorf("pullSecureImage errored out: %s", err)
+		return err
+	}
+
+	err = createRuntimeBundle(ociSpec, req)
+	if err != nil {
+		agentLog.WithError(err).Errorf("createRuntimeBundle errored out: %s", err)
+		return err
+	}
+
+	logrus.Printf("req.OCI.Process.Args is %#v", req.OCI.Process.Args)
+	logrus.Printf("svmConfig.Spec.Containers[0].Args", svmConfig.Spec.Containers[0].Args)
+	updateOCIReq(ociSpec, req, svmConfig)
+	logrus.Printf("AFTER updateOCIReq")
+	fmt.Printf("SPEW req.OCI.Process is")
+	spew.Dump(req.OCI.Process)
+
+	logrus.Printf("JULY19 req.OCI.Process is %#v", req.OCI.Process)
+	ociBundle := kataGuestSvmDir + ociSpec.Root.Path + "/" + req.ContainerId + "/rootfs_bundle"
+	ociSpec.Root.Path = ociBundle + "/rootfs"
+
+	return nil
+}
+
+func checkIfPauseContainer(ociSpec *specs.Spec) bool {
+
+	pause_args := "/pause"
+
+	for _, n := range ociSpec.Process.Args {
+		if len(ociSpec.Process.Args) == 1 && pause_args == n {
+			logrus.Printf("IT'S A PAUSE IMAGE")
+			return true
+		}
+	}
+
+	return false
+}
+
 func (a *agentGRPC) CreateContainer(ctx context.Context, req *pb.CreateContainerRequest) (resp *gpb.Empty, err error) {
 	if err := a.createContainerChecks(req); err != nil {
 		return emptyResp, err
 	}
-
 	// re-scan PCI bus
 	// looking for hidden devices
 	if err = rescanPciBus(); err != nil {
@@ -653,6 +1036,25 @@ func (a *agentGRPC) CreateContainer(ctx context.Context, req *pb.CreateContainer
 
 	// Convert the spec to an actual OCI specification structure.
 	ociSpec, err := pb.GRPCtoOCI(req.OCI)
+	fmt.Printf("SPEW JULY21  PRINTING COMPLETE ociSPec")
+	spew.Dump(ociSpec)
+	//preserve ociSpec.Hostname
+
+	checkPause := checkIfPauseContainer(ociSpec)
+
+	if checkPause != true {
+		logrus.Printf("IT'S NOT A PAUSE IMAGE. Executing pullViaSkopeo")
+		err = startSecureContainers(ociSpec, req)
+		if err != nil {
+			logrus.Printf("Executing pullViaSkopeo Errored out: ", err)
+			agentLog.WithError(err).Errorf("Error while pullingviaSkopeo %s", err)
+			return emptyResp, err
+		}
+	}
+	logrus.Printf("July 21 In CreateContainer")
+	fmt.Printf("SPEW req.OCI.Process is")
+	spew.Dump(req.OCI.Process)
+
 	if err != nil {
 		return emptyResp, err
 	}
@@ -840,6 +1242,7 @@ func (a *agentGRPC) updateSharedPidNs(ctr *container) error {
 }
 
 func (a *agentGRPC) StartContainer(ctx context.Context, req *pb.StartContainerRequest) (*gpb.Empty, error) {
+	logrus.Printf("INSIDE StartContainer")
 	ctr, err := a.getContainer(req.ContainerId)
 	if err != nil {
 		return emptyResp, err
@@ -853,7 +1256,7 @@ func (a *agentGRPC) StartContainer(ctx context.Context, req *pb.StartContainerRe
 	if status != libcontainer.Created {
 		return nil, grpcStatus.Errorf(codes.FailedPrecondition, "Container %s status %s, should be %s", req.ContainerId, status.String(), libcontainer.Created.String())
 	}
-
+	logrus.Printf("CONTAINER EXEC NOW")
 	if err := ctr.container.Exec(); err != nil {
 		return emptyResp, err
 	}
@@ -1441,7 +1844,7 @@ func (a *agentGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSandboxRequ
 
 	a.sandbox.mounts = mountList
 
-	if err := setupDNS(a.sandbox.network.dns); err != nil {
+	if err := setupDNS(); err != nil {
 		return emptyResp, err
 	}
 

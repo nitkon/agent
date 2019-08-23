@@ -8,12 +8,12 @@ package main
 
 import (
 	"fmt"
+	"golang.org/x/sys/unix"
+	"io/ioutil"
 	"net"
 	"os"
 	"reflect"
 	"sync"
-
-	"golang.org/x/sys/unix"
 
 	"github.com/kata-containers/agent/pkg/types"
 	pb "github.com/kata-containers/agent/protocols/grpc"
@@ -575,8 +575,10 @@ func (s *sandbox) updateRoute(netHandle *netlink.Handle, route *types.Route, add
 // DNS //
 /////////
 
-func setupDNS(dns []string) error {
-	return nil
+// To be replaced by setup DNS PR, once it gets merged upstream.
+func setupDNS() error {
+	err := ioutil.WriteFile("/etc/resolv.conf", []byte("nameserver   8.8.8.8"), 0644)
+	return err
 }
 
 ////////////
