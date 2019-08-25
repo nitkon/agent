@@ -7,9 +7,12 @@
 package main
 
 import (
+	"io/ioutil"
 	"net"
+	"os"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/kata-containers/agent/pkg/types"
@@ -421,4 +424,31 @@ func TestListRoutesWithTwoInterfacesSameSubnet(t *testing.T) {
 	assert.True(reflect.DeepEqual(results.Routes[2], expectedRoutes[2]),
 		"Route listed didn't match: got %+v, expecting %+v", results.Routes[2], expectedRoutes[2])
 
+}
+
+func TestSetupDNS(t *testing.T) {
+	tmpfile, err := ioutil.TempFile("/etc", "resolv.conf")
+	assert.NoError(t, err)
+	guestDNSFile = tmpfile.Name()
+
+	tmpfile, err = ioutil.TempFile("/etc", "resolv.conf")
+	assert.NoError(t, err)
+	kataGuestSandboxDNSFile = tmpfile.Name()
+
+	defer os.RemoveAll(guestDNSFile)
+	defer os.RemoveAll(kataGuestSandboxDNSFile)
+
+	dns := []string{
+		"nameserver 8.8.8.8",
+		"nameserver 8.8.4.4",
+	}
+
+	err = setupDNS(dns)
+	assert.NoError(t, err)
+
+	content, err := ioutil.ReadFile(guestDNSFile)
+	assert.NoError(t, err)
+
+	expectedDNS := strings.Split(string(content), "\n")
+	assert.Equal(t, dns, expectedDNS)
 }
