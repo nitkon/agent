@@ -149,6 +149,33 @@
   revision = "7d4729fb36185a7c1719923406c9d40e54fb93c7"
 
 [[projects]]
+  digest = "1:e0cc8395ea893c898ff5eb0850f4d9851c1f57c78c232304a026379a47a552d0"
+  name = "github.com/opencontainers/go-digest"
+  packages = ["."]
+  pruneopts = "NUT"
+  revision = "279bed98673dd5bef374d3b6e4b09e2af76183bf"
+  version = "v1.0.0-rc1"
+
+[[projects]]
+  digest = "1:1d646200376e0fcc46aa81985bc7315f44833dd7c316a9a5357e6363666470a5"
+  name = "github.com/opencontainers/image-spec"
+  packages = [
+    "schema",
+    "specs-go",
+    "specs-go/v1",
+  ]
+  pruneopts = "NUT"
+  revision = "d60099175f88c47cd379c4738d158884749ed235"
+  version = "v1.0.1"
+
+[[projects]]
+  digest = "1:8840c27656936772759c0523e5471b49b3c39ebabf3acc5d7ee32e898a2b65ff"
+  name = "github.com/opencontainers/image-tools"
+  packages = ["image"]
+  pruneopts = "NUT"
+  revision = "93db3b16e6738bf9b8bee47d86ac93be5340838b"
+
+[[projects]]
   digest = "1:8d2b8396c6f94a08d06f43286ff0260c1c40e1b6a3797d6afaa35613cf27a967"
   name = "github.com/opencontainers/runc"
   packages = [
@@ -303,6 +330,38 @@
   revision = "be1fbeda19366dea804f00efff2dd73a1642fdcc"
 
 [[projects]]
+  branch = "master"
+  digest = "1:6dadf98a3dd66127f7a6b0314d9dc4301e496aa5e3095b9f630bf3621c50bd13"
+  name = "github.com/xeipuuv/gojsonpointer"
+  packages = ["."]
+  pruneopts = "NUT"
+  revision = "df4f5c81cb3b310899c091852a576ea7d178aedb"
+
+[[projects]]
+  branch = "master"
+  digest = "1:131db546a264d76defd7a4ce233796316b2ab856991cb4b7d6ced2a3c7294ad3"
+  name = "github.com/xeipuuv/gojsonreference"
+  packages = ["."]
+  pruneopts = "NUT"
+  revision = "bd5ef7bd5415a7ac448318e64f11a24cd21e594b"
+
+[[projects]]
+  digest = "1:5185937abbca299da07bcbeb4e38dfa186c09fbf60042c3d07e0073a0634a78f"
+  name = "github.com/xeipuuv/gojsonschema"
+  packages = ["."]
+  pruneopts = "NUT"
+  revision = "f971f3cd73b2899de6923801c147f075263e0c50"
+  version = "v1.1.0"
+
+[[projects]]
+  branch = "master"
+  digest = "1:91ed6116b126ec7fa7b9f9460356ee6b3005e5ed320b8e85510937f44d3d62d5"
+  name = "go4.org"
+  packages = ["errorutil"]
+  pruneopts = "NUT"
+  revision = "94abd6928b1da39b1d757b60c93fb2419c409fa1"
+
+[[projects]]
   digest = "1:b20c63a56900e442d5f435613fefc9392cbe8849467510fcc3869dbdad9441bb"
   name = "golang.org/x/net"
   packages = [
@@ -389,10 +448,19 @@
   pruneopts = "NUT"
   revision = "d11072e7ca9811b1100b80ca0269ac831f06d024"
 
+[[projects]]
+  digest = "1:18108594151654e9e696b27b181b953f9a90b16bf14d253dd1b397b025a1487f"
+  name = "gopkg.in/yaml.v2"
+  packages = ["."]
+  pruneopts = "NUT"
+  revision = "51d6538a90f86fe93ac480b35f37b2be17fef232"
+  version = "v2.2.2"
+
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
   input-imports = [
+    "github.com/davecgh/go-spew/spew",
     "github.com/docker/docker/pkg/parsers",
     "github.com/gogo/protobuf/gogoproto",
     "github.com/gogo/protobuf/jsonpb",
@@ -401,6 +469,7 @@
     "github.com/grpc-ecosystem/grpc-opentracing/go/otgrpc",
     "github.com/hashicorp/yamux",
     "github.com/mdlayher/vsock",
+    "github.com/opencontainers/image-tools/image",
     "github.com/opencontainers/runc/libcontainer",
     "github.com/opencontainers/runc/libcontainer/cgroups",
     "github.com/opencontainers/runc/libcontainer/configs",
@@ -420,6 +489,7 @@
     "google.golang.org/grpc",
     "google.golang.org/grpc/codes",
     "google.golang.org/grpc/status",
+    "gopkg.in/yaml.v2",
   ]
   solver-name = "gps-cdcl"
   solver-version = 1
