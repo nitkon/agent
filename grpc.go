@@ -9,6 +9,8 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
 	"encoding/json"
 	"fmt"
 	"github.com/opencontainers/image-tools/image"
@@ -22,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	b64 "encoding/base64"
 	"github.com/davecgh/go-spew/spew"
 	gpb "github.com/gogo/protobuf/types"
 	"github.com/kata-containers/agent/pkg/types"
@@ -875,14 +878,35 @@ func findAndReadConfigmap(containerId string) error {
 			_, err = os.Stat(file)
 			if err == nil {
 				logrus.Printf("Found file for reading config data %s", file)
+
 				yamlContainerSpec, err := ioutil.ReadFile(file) //Here you can decrypt the encrypted container yaml present in configmap
 				if err != nil {
 					agentLog.WithError(err).Errorf("Could not read file %s: %s", file, err)
 					return err
 				}
 
+				sDec, _ := b64.StdEncoding.DecodeString(string(yamlContainerSpec)) //decoded into an encoded blob
+				//decrypt it by fetching keys
+				key, err := ioutil.ReadFile("/symm_key")
+				nonce, err := ioutil.ReadFile("/nonce")
+
+				block, err := aes.NewCipher(key)
+				if err != nil {
+					panic(err.Error())
+				}
+
+				aesgcm, err := cipher.NewGCM(block)
+				if err != nil {
+					panic(err.Error())
+				}
+
+				plaintextBytes, err := aesgcm.Open(nil, nonce, sDec, nil)
+				if err != nil {
+					panic(err.Error())
+				}
+
 				fmt.Println("BEFORE Unmarshalling into svmConfig %#v", svmConfig)
-				err = yaml.Unmarshal(yamlContainerSpec, &svmConfig)
+				err = yaml.Unmarshal(plaintextBytes, &svmConfig)
 				fmt.Println("AFTER Unmarshalling into svmConfig %#v", svmConfig)
 				if err != nil {
 					agentLog.WithError(err).Errorf("Error unmarshalling yaml %s", err)
