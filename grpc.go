@@ -9,11 +9,8 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
 	"encoding/json"
 	"fmt"
-	"github.com/opencontainers/image-tools/image"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -25,8 +22,10 @@ import (
 	"time"
 
 	b64 "encoding/base64"
+
 	"github.com/davecgh/go-spew/spew"
 	gpb "github.com/gogo/protobuf/types"
+	"github.com/kata-containers/agent/crypto"
 	"github.com/kata-containers/agent/pkg/types"
 	pb "github.com/kata-containers/agent/protocols/grpc"
 	"github.com/opencontainers/runc/libcontainer"
@@ -444,7 +443,7 @@ func (a *agentGRPC) execProcess(ctr *container, proc *process, createContainer b
 
 	if createContainer != true {
 		logrus.Printf("Inside execProcess, calling findAndReadConfigmap containerid: %s", ctr.id)
-		err := findAndReadConfigmap(ctr.id)
+		err := findAndReadConfigmap(ctr.id, proc.process.Env)
 		if err != nil {
 			fmt.Println("execProcess findAndReadConfigmap failed: %s", err)
 			return err
@@ -829,13 +828,24 @@ func createRuntimeBundle(ociSpec *specs.Spec, req *pb.CreateContainerRequest) er
 	ociImage := kataGuestSvmDir + ociSpec.Root.Path + "/" + req.ContainerId + "/rootfs_dir"
 
 	logrus.Printf("INSIDE createRuntimeBundle OCIIMAGE IS: %s   ociBundle is: %s", ociImage, ociBundle)
-	err := image.CreateRuntimeBundleLayout(ociImage, ociBundle, "rootfs", "", []string{"platform.os=linux"})
+	//	time.Sleep(20000 * time.Second)
+
+	//	err := image.CreateRuntimeBundleLayout(ociImage, ociBundle, "rootfs", "", []string{"platform.os=linux"})
+	cm := "oci-image-tool"
+	arg1 := "create"
+	arg2 := "--ref=platform.os=linux"
+	cmd := exec.Command(cm, arg1, arg2, ociImage, ociBundle)
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+	err := cmd.Run()
 	if err != nil {
 		agentLog.WithField("ocibundle err: ", err).Debug("create oci bundle failed")
 	}
 
-	var out bytes.Buffer
-	var stderr bytes.Buffer
+	//	var out bytes.Buffer
+	//	var stderr bytes.Buffer
 
 	_, err = os.Stat(ociBundle)
 	if err != nil {
@@ -846,7 +856,7 @@ func createRuntimeBundle(ociSpec *specs.Spec, req *pb.CreateContainerRequest) er
 	}
 
 	// Make ociBundle executable as some images need to execute .sh files at startup
-	cmd := exec.Command("chmod", "-R", "+x", ociBundle)
+	cmd = exec.Command("chmod", "-R", "+x", ociBundle)
 	cmd.Stdout = &out
 	cmd.Stderr = &stderr
 
@@ -866,13 +876,19 @@ func createRuntimeBundle(ociSpec *specs.Spec, req *pb.CreateContainerRequest) er
 }
 
 //Find and Read configmap volume mounted into the scratch container rootfs
-func findAndReadConfigmap(containerId string) error {
+func findAndReadConfigmap(containerId string, vaultEnv []string) error {
 
 	var files []string
 	err := filepath.Walk(kataGuestSharedDir, traverseFiles(&files))
 	if err != nil {
 		return err
 	}
+
+	key, nonce, err := crypto.GetCMDecryptionKey(vaultEnv)
+	if err != nil {
+		return err
+	}
+
 	for _, file := range files {
 		if strings.Contains(file, configmapFileName) && strings.Contains(file, containerId) {
 			_, err = os.Stat(file)
@@ -885,29 +901,17 @@ func findAndReadConfigmap(containerId string) error {
 					return err
 				}
 
-				sDec, _ := b64.StdEncoding.DecodeString(string(yamlContainerSpec)) //decoded into an encoded blob
-				//decrypt it by fetching keys
-				key, err := ioutil.ReadFile("/symm_key")
-				nonce, err := ioutil.ReadFile("/nonce")
-
-				block, err := aes.NewCipher(key)
+				containerspec, err := b64.StdEncoding.DecodeString(string(yamlContainerSpec)) //decoded into an encoded blob
 				if err != nil {
-					panic(err.Error())
+					return err
 				}
 
-				aesgcm, err := cipher.NewGCM(block)
+				decryptedConfig, err := crypto.DecryptSVMConfig(containerspec, key, nonce)
 				if err != nil {
-					panic(err.Error())
+					return err
 				}
 
-				plaintextBytes, err := aesgcm.Open(nil, nonce, sDec, nil)
-				if err != nil {
-					panic(err.Error())
-				}
-
-				fmt.Println("BEFORE Unmarshalling into svmConfig %#v", svmConfig)
-				err = yaml.Unmarshal(plaintextBytes, &svmConfig)
-				fmt.Println("AFTER Unmarshalling into svmConfig %#v", svmConfig)
+				err = yaml.Unmarshal(decryptedConfig, &svmConfig)
 				if err != nil {
 					agentLog.WithError(err).Errorf("Error unmarshalling yaml %s", err)
 					return err
@@ -964,8 +968,7 @@ func pullOciImage(ociSpec *specs.Spec, svmConfig SVMConfig, req *pb.CreateContai
 }
 
 func startSecureContainers(ociSpec *specs.Spec, req *pb.CreateContainerRequest) error {
-
-	err := findAndReadConfigmap(req.ContainerId)
+	err := findAndReadConfigmap(req.ContainerId, ociSpec.Process.Env)
 	if err != nil {
 		agentLog.WithError(err).Errorf("findAndReadConfigmap errored out: %s", err)
 		return err
