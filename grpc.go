@@ -826,10 +826,8 @@ func createRuntimeBundle(ociSpec *specs.Spec, req *pb.CreateContainerRequest) er
 	agentLog.WithField("ociImage is: ", ociImage).Debug("Creating runtime bundle")
 	agentLog.WithField("ociBundle is: ", ociBundle).Debug("Creating runtime bundle")
 
-	cm := "oci-image-tool"
-	arg1 := "create"
-	arg2 := "--ref=platform.os=linux"
-	cmd := exec.Command(cm, arg1, arg2, ociImage, ociBundle)
+	// Since image.CreateRuntimeBundleLayout is returning a nil pointer exception, os exec the oci-image-tool directly
+	cmd := exec.Command("oci-image-tool", "create", "--ref=platform.os=linux", ociImage, ociBundle)
 	var out bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &out
