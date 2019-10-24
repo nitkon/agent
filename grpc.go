@@ -442,25 +442,24 @@ func (a *agentGRPC) execProcess(ctr *container, proc *process, createContainer b
 	}
 
 	if createContainer != true {
-		logrus.Printf("Inside execProcess, calling findAndReadConfigmap containerid: %s", ctr.id)
+		agentLog.WithField("container id: ", ctr.id).Debug("ExecProcess, calling findAndReadConfigmap")
 		err := findAndReadConfigmap(ctr.id, proc.process.Env)
 		if err != nil {
-			fmt.Println("execProcess findAndReadConfigmap failed: %s", err)
+			agentLog.WithError(err).Errorf("execProcess findAndReadConfigmap failed")
 			return err
 		}
-		fmt.Println("execProcess findAndReadConfigmap Success")
+		agentLog.Debug("Successfully found and read configmap")
 
 		err = findAndReadConfigJson(ctr.id)
 		if err != nil {
-			logrus.Printf("Inside execProcess, findAndReadConfigJson FAILED %s", err)
 			agentLog.WithError(err).Errorf("findAndReadConfigJson errored out: %s", err)
 			return err
 		}
 
-		fmt.Printf("SPEW JULY21  PRINTING ociJsonSpec from execProcess")
+		agentLog.Debug("ociJsonSpec is: ")
 		spew.Dump(ociJsonSpec)
 
-		fmt.Printf("SPEW JULY21  PRINTING svmConfig from execProcess")
+		agentLog.Debug("svmConfig is: ")
 		spew.Dump(svmConfig)
 
 		//ToDo: Iterate over env name and vales and append all of them
@@ -469,7 +468,6 @@ func (a *agentGRPC) execProcess(ctr *container, proc *process, createContainer b
 			proc.process.Env = append(proc.process.Env, ociJsonSpec.Process.Env...)
 
 			//ToDo: Fix the unmarshalling of multiple env variables specified in container yaml in configmap
-			logrus.Printf("Entering svmEnv range")
 			i := 0
 			var createEnv string
 			for _, svmEnv := range svmConfig.Spec.Containers[i].Env {
@@ -541,16 +539,16 @@ func findAndReadConfigJson(containerId string) error {
 		if strings.Contains(file, configmapJsonFileName) && strings.Contains(file, containerId) {
 			_, err = os.Stat(file)
 			if err == nil {
-				logrus.Printf("Found file for reading JSON config data %s", file)
+				agentLog.WithField("file: ", file).Debug("Found file for reading JSON config data")
 				configJSONBytes, err := ioutil.ReadFile(file)
 				if err != nil {
 					agentLog.WithError(err).Errorf("Could not read file %s: %s", file, err)
 					return err
 				}
 
-				logrus.Println("EXEC BEFORE Unmarshalling into ociJsonSpec %#v", ociJsonSpec)
+				agentLog.WithField("ociJsonSpec: ", ociJsonSpec).Debug("Before unmarshalling into ociJsonSpec")
 				err = json.Unmarshal(configJSONBytes, &ociJsonSpec)
-				logrus.Println("EXEC AFTER Unmarshalling into ociJsonSpec %#v", ociJsonSpec)
+				agentLog.WithField("ociJsonSpec: ", ociJsonSpec).Debug("After unmarshalling into ociJsonSpec")
 				if err != nil {
 					agentLog.WithError(err).Errorf("Error unmarshalling ociJsonSpec %s", err)
 					return err
@@ -560,10 +558,10 @@ func findAndReadConfigJson(containerId string) error {
 				agentLog.WithError(err).Errorf("Unable to stat file %s err:%s", file, err)
 				return err
 			}
-			logrus.Printf("SUCCESS: FOUND FILE findAndReadConfigJson. containerid is: %s", containerId)
+			agentLog.Debug("Successfully found and read configmap")
 			break
 		}
-		logrus.Printf("FAILED TO FIND ANY SUCH FILE findAndReadConfigJson. containerid is: %s", containerId)
+		agentLog.Debug("Failed to find and read the configmap")
 	}
 	return err
 
@@ -752,46 +750,44 @@ func traverseFiles(files *[]string) filepath.WalkFunc {
 
 func readOciImageConfigJson(ociSpec *specs.Spec, req *pb.CreateContainerRequest) (*specs.Spec, error) {
 
-	//	ociJsonSpec := &specs.Spec{}
-	logrus.Printf("INside readOciImageConfigJson")
 	configPath := kataGuestSvmDir + ociSpec.Root.Path + "/" + req.ContainerId + "/rootfs_bundle" + "/config.json"
-	logrus.Printf("Reading configJSONBytes from %s", configPath)
+	agentLog.Debug("Reading configJSONBytes from %s", configPath)
 
 	_, err := os.Stat(configPath)
 	if err != nil {
-		logrus.Printf("ConfigPath does not exsists %s", err)
+		agentLog.WithError(err).Errorf("ConfigPath does not exsists %s", configPath)
 		return ociJsonSpec, err
 	}
 
 	configJSONBytes, err := ioutil.ReadFile(configPath)
 	if err != nil {
-		logrus.Printf("Could not open OCI config file")
+		agentLog.WithError(err).Errorf("Could not open OCI config file %s", configPath)
 		return ociJsonSpec, err
 	}
 
-	logrus.Printf("Unmarshalling the data")
+	agentLog.Debug("Unmarshalling the data")
 	if err := json.Unmarshal(configJSONBytes, &ociJsonSpec); err != nil {
-		logrus.Printf("Could not unmarshall OCI config file")
+		agentLog.WithError(err).Errorf("Could not unmarshall OCI config file")
 		return ociJsonSpec, err
 	}
 
-	fmt.Printf("SPEW JULY21  PRINTING ociSPec READ FROM CONFIG JSON GOT FROM SKOPEO PULL")
+	agentLog.Debug("The unmarshalled ociJsonSpec is")
 	spew.Dump(ociJsonSpec)
 
 	return ociJsonSpec, nil
 }
 
 func updateOCIReq(ociSpec *specs.Spec, req *pb.CreateContainerRequest, svmConfig SVMConfig) {
-	logrus.Printf("INSIDE updateOCIReq")
-	logrus.Printf("JULY 19 svmConfig is %#v", svmConfig)
-	logrus.Printf("JULY 19 req.OCI.Process is %#v", req.OCI.Process)
-	logrus.Printf("JULY 19 req.OCI.Process is %#v", req.ContainerId)
+	agentLog.Debug("Updating the OCI request")
+	agentLog.WithField("svmConfig is: ", svmConfig).Debug("Before Updating the OCI Request")
+	agentLog.WithField("req.OCI.Process is: ", req.OCI.Process).Debug("Before Updating the OCI Request")
+	agentLog.WithField("Container is: ", req.ContainerId).Debug("Before Updating the OCI Request")
 
 	ociJsonSpec, err := readOciImageConfigJson(ociSpec, req)
-	fmt.Printf("SPEW updateOCIReq")
+	agentLog.Debug("ociJsonSpec is: ")
 	spew.Dump(ociJsonSpec)
 	if err != nil {
-		logrus.Printf("readOciImageConfigJson Errored out %s", err)
+		agentLog.WithError(err).Errorf("readOciImageConfigJson Errored out: %s", err)
 	}
 
 	if len(svmConfig.Spec.Containers[0].Args) == 0 {
@@ -817,7 +813,7 @@ func updateOCIReq(ociSpec *specs.Spec, req *pb.CreateContainerRequest, svmConfig
 		req.OCI.Process.Cwd = ociJsonSpec.Process.Cwd
 	}
 
-	fmt.Printf("SPEW req.OCI.Process is")
+	agentLog.Debug("Updated req.OCI.Process is")
 	spew.Dump(req.OCI.Process)
 
 }
@@ -827,10 +823,9 @@ func createRuntimeBundle(ociSpec *specs.Spec, req *pb.CreateContainerRequest) er
 	ociBundle := kataGuestSvmDir + ociSpec.Root.Path + "/" + req.ContainerId + "/rootfs_bundle"
 	ociImage := kataGuestSvmDir + ociSpec.Root.Path + "/" + req.ContainerId + "/rootfs_dir"
 
-	logrus.Printf("INSIDE createRuntimeBundle OCIIMAGE IS: %s   ociBundle is: %s", ociImage, ociBundle)
-	//	time.Sleep(20000 * time.Second)
+	agentLog.WithField("ociImage is: ", ociImage).Debug("Creating runtime bundle")
+	agentLog.WithField("ociBundle is: ", ociBundle).Debug("Creating runtime bundle")
 
-	//	err := image.CreateRuntimeBundleLayout(ociImage, ociBundle, "rootfs", "", []string{"platform.os=linux"})
 	cm := "oci-image-tool"
 	arg1 := "create"
 	arg2 := "--ref=platform.os=linux"
@@ -844,15 +839,12 @@ func createRuntimeBundle(ociSpec *specs.Spec, req *pb.CreateContainerRequest) er
 		agentLog.WithField("ocibundle err: ", err).Debug("create oci bundle failed")
 	}
 
-	//	var out bytes.Buffer
-	//	var stderr bytes.Buffer
-
 	_, err = os.Stat(ociBundle)
 	if err != nil {
-		logrus.Printf("FAILURE: ociBundle does NOT exists: %s", ociBundle)
+		agentLog.WithError(err).Errorf("ociBundle does not exists: %s", ociBundle)
 		return err
 	} else {
-		logrus.Printf("SUCCESS: ociBundle does exists: %s", ociBundle)
+		agentLog.WithField("ociBundle: ", ociBundle).Debug("Created ociBundle successfully")
 	}
 
 	// Make ociBundle executable as some images need to execute .sh files at startup
@@ -862,14 +854,8 @@ func createRuntimeBundle(ociSpec *specs.Spec, req *pb.CreateContainerRequest) er
 
 	err = cmd.Run()
 	if err != nil {
-		logrus.Printf("CHMOD FAILED%v %s %s", err, stderr.String(), out.String())
-		logrus.Printf("%s", stderr.String())
-		logrus.Printf("%s", out.String())
-
 		agentLog.WithError(err).Errorf("chmod failed %s", err)
 		return err
-	} else {
-		logrus.Printf("CHMOD SUCCESS%v %s %s", err, stderr.String(), out.String())
 	}
 
 	return err
@@ -893,9 +879,8 @@ func findAndReadConfigmap(containerId string, vaultEnv []string) error {
 		if strings.Contains(file, configmapFileName) && strings.Contains(file, containerId) {
 			_, err = os.Stat(file)
 			if err == nil {
-				logrus.Printf("Found file for reading config data %s", file)
-
-				yamlContainerSpec, err := ioutil.ReadFile(file) //Here you can decrypt the encrypted container yaml present in configmap
+				agentLog.WithField("ConfigMap path: ", file).Debug("Found file for reading config map")
+				yamlContainerSpec, err := ioutil.ReadFile(file)
 				if err != nil {
 					agentLog.WithError(err).Errorf("Could not read file %s: %s", file, err)
 					return err
@@ -943,10 +928,6 @@ func pullOciImage(ociSpec *specs.Spec, svmConfig SVMConfig, req *pb.CreateContai
 
 	err := cmd.Run()
 	if err != nil {
-		logrus.Printf("JULY 19 CREATE DIR FAILED %v %s %s", err, stderr.String(), out.String())
-		logrus.Printf("%s", stderr.String())
-		logrus.Printf("%s", out.String())
-
 		agentLog.WithError(err).Errorf("Error executing mkdir %s", err)
 		return err
 	}
@@ -957,9 +938,6 @@ func pullOciImage(ociSpec *specs.Spec, svmConfig SVMConfig, req *pb.CreateContai
 
 	err = cmd.Run()
 	if err != nil {
-		logrus.Printf("JULY 19 SKOPEO ERRORED OUT %v %s %s", err, stderr.String(), out.String())
-		logrus.Printf("%s", stderr.String())
-		logrus.Printf("%s", out.String())
 		agentLog.WithError(err).Errorf("Error executing skopeo copy %s", err)
 		return err
 	}
@@ -986,14 +964,12 @@ func startSecureContainers(ociSpec *specs.Spec, req *pb.CreateContainerRequest) 
 		return err
 	}
 
-	logrus.Printf("req.OCI.Process.Args is %#v", req.OCI.Process.Args)
-	logrus.Printf("svmConfig.Spec.Containers[0].Args", svmConfig.Spec.Containers[0].Args)
+	agentLog.WithField("req.OCI.Process.Args is:", req.OCI.Process.Args).Debug("Before updating OCI Request")
+	agentLog.WithField("svmConfig.Spec.Containers[0].Args", svmConfig.Spec.Containers[0].Args).Debug("Before updating OCI Request")
 	updateOCIReq(ociSpec, req, svmConfig)
-	logrus.Printf("AFTER updateOCIReq")
-	fmt.Printf("SPEW req.OCI.Process is")
+	agentLog.Debug("AFTER updateOCIReq req.OCI.Process is:")
 	spew.Dump(req.OCI.Process)
 
-	logrus.Printf("JULY19 req.OCI.Process is %#v", req.OCI.Process)
 	ociBundle := kataGuestSvmDir + ociSpec.Root.Path + "/" + req.ContainerId + "/rootfs_bundle"
 	ociSpec.Root.Path = ociBundle + "/rootfs"
 
@@ -1006,7 +982,7 @@ func checkIfPauseContainer(ociSpec *specs.Spec) bool {
 
 	for _, n := range ociSpec.Process.Args {
 		if len(ociSpec.Process.Args) == 1 && pause_args == n {
-			logrus.Printf("IT'S A PAUSE IMAGE")
+			agentLog.Debug("It is a pause image")
 			return true
 		}
 	}
@@ -1063,23 +1039,21 @@ func (a *agentGRPC) CreateContainer(ctx context.Context, req *pb.CreateContainer
 
 	// Convert the spec to an actual OCI specification structure.
 	ociSpec, err := pb.GRPCtoOCI(req.OCI)
-	fmt.Printf("SPEW JULY21  PRINTING COMPLETE ociSPec")
+	agentLog.Debug("Converted GRPC req to ociSPec: ")
 	spew.Dump(ociSpec)
 	//preserve ociSpec.Hostname
 
 	checkPause := checkIfPauseContainer(ociSpec)
 
 	if checkPause != true {
-		logrus.Printf("IT'S NOT A PAUSE IMAGE. Executing pullViaSkopeo")
+		agentLog.Debug("It is not a pause image. Starting secure containers")
 		err = startSecureContainers(ociSpec, req)
 		if err != nil {
-			logrus.Printf("Executing pullViaSkopeo Errored out: ", err)
-			agentLog.WithError(err).Errorf("Error while pullingviaSkopeo %s", err)
+			agentLog.WithError(err).Errorf("Error starting secure containers %s", err)
 			return emptyResp, err
 		}
 	}
-	logrus.Printf("July 21 In CreateContainer")
-	fmt.Printf("SPEW req.OCI.Process is")
+	agentLog.Debug("Started Secure Container. Updated req.OCI.Process is")
 	spew.Dump(req.OCI.Process)
 
 	if err != nil {
@@ -1269,7 +1243,7 @@ func (a *agentGRPC) updateSharedPidNs(ctr *container) error {
 }
 
 func (a *agentGRPC) StartContainer(ctx context.Context, req *pb.StartContainerRequest) (*gpb.Empty, error) {
-	logrus.Printf("INSIDE StartContainer")
+	agentLog.Debug("Starting the container")
 	ctr, err := a.getContainer(req.ContainerId)
 	if err != nil {
 		return emptyResp, err
@@ -1283,7 +1257,7 @@ func (a *agentGRPC) StartContainer(ctx context.Context, req *pb.StartContainerRe
 	if status != libcontainer.Created {
 		return nil, grpcStatus.Errorf(codes.FailedPrecondition, "Container %s status %s, should be %s", req.ContainerId, status.String(), libcontainer.Created.String())
 	}
-	logrus.Printf("CONTAINER EXEC NOW")
+	agentLog.Debug("Execing into the container")
 	if err := ctr.container.Exec(); err != nil {
 		return emptyResp, err
 	}
