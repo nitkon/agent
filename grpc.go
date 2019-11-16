@@ -466,7 +466,7 @@ func (a *agentGRPC) execProcess(ctr *container, proc *process, createContainer b
 
 		//ToDo: Iterate over env name and vales and append all of them
 		if len(svmConfig.Spec.Containers[0].Env) != 0 {
-			// works only for 1 env. Todo Iterate over all env mentioned in configmap yaml
+/*			// works only for 1 env. Todo Iterate over all env mentioned in configmap yaml
 			proc.process.Env = append(proc.process.Env, ociJsonSpec.Process.Env...)
 
 			//ToDo: Fix the unmarshalling of multiple env variables specified in container yaml in configmap
@@ -485,7 +485,18 @@ func (a *agentGRPC) execProcess(ctr *container, proc *process, createContainer b
 		} else {
 			proc.process.Env = append(proc.process.Env, ociJsonSpec.Process.Env...)
 		}
+*/
+                // works only for 1 env. Todo Iterate over all env mentioned.
+                for i := 0; i < len(svmConfig.Spec.Containers[0].Env); i++ {
+//              for _, envv := range svmConfig.Spec.Containers[0].Env {
+//                      createEnv := envv.Name + "=" + envv.Value
+                        fmt.Printf("ENV print %#v", svmConfig.Spec.Containers[0].Env[i])
+                        createEnv := svmConfig.Spec.Containers[0].Env[i].Name + "=" + svmConfig.Spec.Containers[0].Env[i].Value
+                        proc.process.Env = append(proc.process.Env, createEnv)
+                        fmt.Printf("EXEC Updated NOV16 req.OCI.Process.Env is %#v", proc.process.Env)
+                }
 
+		}
 		if svmConfig.Spec.Containers[0].Cwd != "" {
 			proc.process.Cwd = svmConfig.Spec.Containers[0].Cwd
 		} else {
@@ -784,12 +795,16 @@ func updateOCIReq(ociSpec *specs.Spec, req *pb.CreateContainerRequest, svmConfig
 	req.OCI.Process.Env = append(req.OCI.Process.Env, ociJsonSpec.Process.Env...)
 	if len(svmConfig.Spec.Containers[0].Env) != 0 {
 		// works only for 1 env. Todo Iterate over all env mentioned.
-		for _, envv := range svmConfig.Spec.Containers[0].Env {
-			createEnv := envv.Name + "=" + envv.Value
+		for i := 0; i < len(svmConfig.Spec.Containers[0].Env); i++ {
+//		for _, envv := range svmConfig.Spec.Containers[0].Env {
+//			createEnv := envv.Name + "=" + envv.Value
+			fmt.Printf("ENV print %#v", svmConfig.Spec.Containers[0].Env[i])
+			createEnv := svmConfig.Spec.Containers[0].Env[i].Name + "=" + svmConfig.Spec.Containers[0].Env[i].Value
 			req.OCI.Process.Env = append(req.OCI.Process.Env, createEnv)
+			fmt.Printf("Updated NOV16 req.OCI.Process.Env is %#v", req.OCI.Process.Env)
 		}
 	}
-
+	fmt.Printf("FINAL Updated NOV16 req.OCI.Process.Env is %#v", req.OCI.Process.Env)
 	if svmConfig.Spec.Containers[0].Cwd != "" {
 		req.OCI.Process.Cwd = svmConfig.Spec.Containers[0].Cwd
 	} else {
