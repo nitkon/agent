@@ -443,13 +443,13 @@ func (a *agentGRPC) execProcess(ctr *container, proc *process, createContainer b
 
 	if createContainer != true {
 		agentLog.WithField("container id: ", ctr.id).Debug("ExecProcess, calling findAndReadConfigmap")
-		err := findAndReadConfigmap(ctr.id, proc.process.Env)
+/*		err := findAndReadConfigmap(ctr.id, proc.process.Env)
 		if err != nil {
 			agentLog.WithError(err).Errorf("execProcess findAndReadConfigmap failed")
 			return err
 		}
 		agentLog.Debug("Successfully found and read configmap")
-
+*/
 		err = findAndReadConfigJson(ctr.id)
 		if err != nil {
 			agentLog.WithError(err).Errorf("findAndReadConfigJson errored out: %s", err)
@@ -860,21 +860,31 @@ func createRuntimeBundle(ociSpec *specs.Spec, req *pb.CreateContainerRequest) er
 }
 
 //Find and Read configmap volume mounted into the scratch container rootfs
-func findAndReadConfigmap(containerId string, vaultEnv []string) error {
+func findAndReadConfigmap(req *pb.CreateContainerRequest, vaultEnv []string) error {
 
-	var files []string
+//	var files []string
+	var file string
+//	containerId := req.ContainerId
+	for _, mounts := range req.OCI.Mounts {
+		if mounts.Destination == "/etc/kavach" {
+			fmt.Printf("Found Configmap Mount Point: %s", mounts.Source)
+			file = filepath.Join(mounts.Source, configmapFileName)
+			break
+		}
+	}
+/*
 	err := filepath.Walk(kataGuestSharedDir, traverseFiles(&files))
 	if err != nil {
 		return err
 	}
-
+*/
 	key, nonce, err := crypto.GetCMDecryptionKey(vaultEnv)
 	if err != nil {
 		return err
 	}
 
-	for _, file := range files {
-		if strings.Contains(file, configmapFileName) && strings.Contains(file, containerId) {
+//	for _, file := range files {
+//		if strings.Contains(file, configmapFileName) && strings.Contains(file, containerId) {
 			_, err = os.Stat(file)
 			if err == nil {
 				agentLog.WithField("ConfigMap path: ", file).Debug("Found file for reading config map")
@@ -904,9 +914,9 @@ func findAndReadConfigmap(containerId string, vaultEnv []string) error {
 				agentLog.WithError(err).Errorf("Unable to stat file %s err:%s", file, err)
 				return err
 			}
-			break
-		}
-	}
+//			break
+//		}
+//	}
 	return err
 
 }
@@ -944,7 +954,15 @@ func pullOciImage(ociSpec *specs.Spec, svmConfig SVMConfig, req *pb.CreateContai
 }
 
 func startSecureContainers(ociSpec *specs.Spec, req *pb.CreateContainerRequest) error {
-	err := findAndReadConfigmap(req.ContainerId, ociSpec.Process.Env)
+	fmt.Printf("NOV15 req.Storages is %#v", req.Storages)
+	fmt.Printf("NOV15 req.OCI.Mounts is \n")
+	spew.Dump(req.OCI.Mounts)
+        fmt.Printf("NOV15 req.OCI.Root is \n")
+        spew.Dump(req.OCI.Root)
+        fmt.Printf("NOV15 req.OCI is \n")
+        spew.Dump(req.OCI)
+
+	err := findAndReadConfigmap(req, ociSpec.Process.Env)
 	if err != nil {
 		agentLog.WithError(err).Errorf("findAndReadConfigmap errored out: %s", err)
 		return err
