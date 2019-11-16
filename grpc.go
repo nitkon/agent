@@ -459,9 +459,9 @@ func (a *agentGRPC) execProcess(ctr *container, proc *process, createContainer b
                                         return err
                                 }
 
-		err = findAndReadConfigJson(ctr.id)
+		err = readConfigJson(ctr.id)
 		if err != nil {
-			agentLog.WithError(err).Errorf("findAndReadConfigJson errored out: %s", err)
+			agentLog.WithError(err).Errorf("readConfigJson errored out: %s", err)
 			return err
 		}
 
@@ -537,16 +537,17 @@ func (a *agentGRPC) execProcess(ctr *container, proc *process, createContainer b
 }
 
 //Find and Read configmap volume mounted into the scratch container rootfs
-func findAndReadConfigJson(containerId string) error {
+func readConfigJson(containerId string) error {
 
-	var files []string
-	err := filepath.Walk(kataGuestSvmDir, traverseFiles(&files))
-	if err != nil {
-		return err
-	}
-	for _, file := range files {
-		if strings.Contains(file, configmapJsonFileName) && strings.Contains(file, containerId) {
-			_, err = os.Stat(file)
+//	var files []string
+//	err := filepath.Walk(kataGuestSvmDir, traverseFiles(&files))
+	file := filepath.Join(kataGuestSvmDir, containerId, "rootfs_bundle", "config.json")
+//	if err != nil {
+//		return err
+//	}
+//	for _, file := range files {
+//		if strings.Contains(file, configmapJsonFileName) && strings.Contains(file, containerId) {
+			_, err := os.Stat(file)
 			if err == nil {
 				agentLog.WithField("file: ", file).Debug("Found file for reading JSON config data")
 				configJSONBytes, err := ioutil.ReadFile(file)
@@ -568,10 +569,10 @@ func findAndReadConfigJson(containerId string) error {
 				return err
 			}
 			agentLog.Debug("Successfully found and read configmap")
-			break
-		}
-		agentLog.Debug("Failed to find and read the configmap")
-	}
+//			break
+//		}
+//		agentLog.Debug("Failed to find and read the configmap")
+//	}
 	return err
 
 }
@@ -746,6 +747,7 @@ func (a *agentGRPC) finishCreateContainer(ctr *container, req *pb.CreateContaine
 	return emptyResp, a.postExecProcess(ctr, ctr.initProcess)
 }
 
+/*
 func traverseFiles(files *[]string) filepath.WalkFunc {
 	return func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -756,7 +758,7 @@ func traverseFiles(files *[]string) filepath.WalkFunc {
 		return nil
 	}
 }
-
+*/
 func readOciImageConfigJson(ociSpec *specs.Spec, req *pb.CreateContainerRequest) (*specs.Spec, error) {
 
 	configPath := kataGuestSvmDir + "/" + req.ContainerId + "/rootfs_bundle" + "/config.json"
