@@ -67,6 +67,7 @@ var (
 	kataGuestSharedDir          = "/run/kata-containers/shared/containers"
 	skopeoSrcImageTransport     = "docker://" //Todo: Handle other registries as well
 	skopeoDestImageTransport    = "oci:"
+	configmapMountPoint         = "/etc/kavach"
 
 	// set when StartTracing() is called.
 	startTracingCalled = false
@@ -450,6 +451,14 @@ func (a *agentGRPC) execProcess(ctr *container, proc *process, createContainer b
 		}
 		agentLog.Debug("Successfully found and read configmap")
 */
+		decryptedConfig := kataGuestSvmDir + "/" + ctr.id + "/" + "decryptedConfig"
+		data, err := ioutil.ReadFile(decryptedConfig)
+                                err = yaml.Unmarshal(data, &svmConfig)
+                                if err != nil {
+                                        agentLog.WithError(err).Errorf("Error unmarshalling yaml while execing inside container %s", err)
+                                        return err
+                                }
+
 		err = findAndReadConfigJson(ctr.id)
 		if err != nil {
 			agentLog.WithError(err).Errorf("findAndReadConfigJson errored out: %s", err)
@@ -750,7 +759,7 @@ func traverseFiles(files *[]string) filepath.WalkFunc {
 
 func readOciImageConfigJson(ociSpec *specs.Spec, req *pb.CreateContainerRequest) (*specs.Spec, error) {
 
-	configPath := kataGuestSvmDir + ociSpec.Root.Path + "/" + req.ContainerId + "/rootfs_bundle" + "/config.json"
+	configPath := kataGuestSvmDir + "/" + req.ContainerId + "/rootfs_bundle" + "/config.json"
 	agentLog.Debug("Reading configJSONBytes from %s", configPath)
 
 	_, err := os.Stat(configPath)
@@ -820,8 +829,8 @@ func updateOCIReq(ociSpec *specs.Spec, req *pb.CreateContainerRequest, svmConfig
 
 func createRuntimeBundle(ociSpec *specs.Spec, req *pb.CreateContainerRequest) error {
 
-	ociBundle := kataGuestSvmDir + ociSpec.Root.Path + "/" + req.ContainerId + "/rootfs_bundle"
-	ociImage := kataGuestSvmDir + ociSpec.Root.Path + "/" + req.ContainerId + "/rootfs_dir"
+	ociBundle := kataGuestSvmDir + "/" + req.ContainerId + "/rootfs_bundle"
+	ociImage := kataGuestSvmDir + "/" + req.ContainerId + "/rootfs_dir"
 
 	agentLog.WithField("ociImage is: ", ociImage).Debug("Creating runtime bundle")
 	agentLog.WithField("ociBundle is: ", ociBundle).Debug("Creating runtime bundle")
@@ -861,16 +870,20 @@ func createRuntimeBundle(ociSpec *specs.Spec, req *pb.CreateContainerRequest) er
 
 //Find and Read configmap volume mounted into the scratch container rootfs
 func findAndReadConfigmap(req *pb.CreateContainerRequest, vaultEnv []string) error {
-
+// ocimounts []pb.Mount
 //	var files []string
 	var file string
 //	containerId := req.ContainerId
 	for _, mounts := range req.OCI.Mounts {
-		if mounts.Destination == "/etc/kavach" {
+		if mounts.Destination == configmapMountPoint {
 			fmt.Printf("Found Configmap Mount Point: %s", mounts.Source)
 			file = filepath.Join(mounts.Source, configmapFileName)
 			break
 		}
+	}
+
+	if file == "" {
+		return fmt.Errorf("No encrypted configmap found mounted at %s", configmapMountPoint)
 	}
 /*
 	err := filepath.Walk(kataGuestSharedDir, traverseFiles(&files))
@@ -904,6 +917,19 @@ func findAndReadConfigmap(req *pb.CreateContainerRequest, vaultEnv []string) err
 					return err
 				}
 
+				// write decrypted configmap into kataGuestSvmDir + "/" + req.ContainerId
+				w := kataGuestSvmDir + "/" + req.ContainerId + "/" + "decryptedConfig"
+				w1 := kataGuestSvmDir + "/" + req.ContainerId
+				fmt.Printf("CREATING DIRECTORY %s", w1)
+				err = os.MkdirAll(w1, os.ModeDir)
+                                if err != nil {
+                                        return err
+                                }
+				err = ioutil.WriteFile(w, decryptedConfig, 0644)
+				if err != nil {
+					return err
+				}
+
 				err = yaml.Unmarshal(decryptedConfig, &svmConfig)
 				if err != nil {
 					agentLog.WithError(err).Errorf("Error unmarshalling yaml %s", err)
@@ -927,7 +953,7 @@ func pullOciImage(ociSpec *specs.Spec, svmConfig SVMConfig, req *pb.CreateContai
 	var stderr bytes.Buffer
 
 	pull := skopeoSrcImageTransport + svmConfig.Spec.Containers[0].Image
-	create_dir := kataGuestSvmDir + ociSpec.Root.Path + "/" + req.ContainerId + "/rootfs_dir:latest"
+	create_dir := kataGuestSvmDir + "/" + req.ContainerId + "/rootfs_dir:latest"
 	destRefString := skopeoDestImageTransport + create_dir
 
 	cmd := exec.Command("mkdir", "-p", create_dir)
@@ -986,7 +1012,7 @@ func startSecureContainers(ociSpec *specs.Spec, req *pb.CreateContainerRequest) 
 	agentLog.Debug("AFTER updateOCIReq req.OCI.Process is:")
 	spew.Dump(req.OCI.Process)
 
-	ociBundle := kataGuestSvmDir + ociSpec.Root.Path + "/" + req.ContainerId + "/rootfs_bundle"
+	ociBundle := kataGuestSvmDir + "/" + req.ContainerId + "/rootfs_bundle"
 	ociSpec.Root.Path = ociBundle + "/rootfs"
 
 	return nil
