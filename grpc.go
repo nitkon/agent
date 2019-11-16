@@ -464,22 +464,20 @@ func (a *agentGRPC) execProcess(ctr *container, proc *process, createContainer b
 		agentLog.Debug("svmConfig is: ")
 		spew.Dump(svmConfig)
 
-		proc.process.Env = append(proc.process.Env, ociJsonSpec.Process.Env...)
+		fmt.Printf("EXEC Before NOV1616 req.OCI.Process.Env is %#v", proc.process.Env)
 		if len(svmConfig.Spec.Containers[0].Env) != 0 {
-			for i := 0; i < len(svmConfig.Spec.Containers[0].Env); i++ {
-				fmt.Printf("ENV print %#v", svmConfig.Spec.Containers[0].Env[i])
-				createEnv := svmConfig.Spec.Containers[0].Env[i].Name + "=" + svmConfig.Spec.Containers[0].Env[i].Value
-				proc.process.Env = append(proc.process.Env, createEnv)
-				fmt.Printf("EXEC Updated NOV16 req.OCI.Process.Env is %#v", proc.process.Env)
+			proc.process.Env = updateEnv(proc.process.Env, ociJsonSpec.Process.Env, svmConfig)
+		}
+		fmt.Printf("EXEC After NOV1616 req.OCI.Process.Env is %#v", proc.process.Env)
+
+		proc.process.Cwd = updateCwd(proc.process.Cwd, ociJsonSpec.Process.Cwd, svmConfig)
+		/*
+			if svmConfig.Spec.Containers[0].Cwd != "" {
+				proc.process.Cwd = svmConfig.Spec.Containers[0].Cwd
+			} else {
+				proc.process.Cwd = ociJsonSpec.Process.Cwd
 			}
-
-		}
-		if svmConfig.Spec.Containers[0].Cwd != "" {
-			proc.process.Cwd = svmConfig.Spec.Containers[0].Cwd
-		} else {
-			proc.process.Cwd = ociJsonSpec.Process.Cwd
-		}
-
+		*/
 		ociJsonSpec = &specs.Spec{}
 		svmConfig = SVMConfig{}
 	}
@@ -745,6 +743,25 @@ func readOciImageConfigJson(ociSpec *specs.Spec, req *pb.CreateContainerRequest)
 
 	return ociJsonSpec, nil
 }
+func updateEnv(ociEnv []string, ociJsonEnv []string, svmConfig SVMConfig) []string {
+	ociEnv = append(ociEnv, ociJsonEnv...)
+	for i := 0; i < len(svmConfig.Spec.Containers[0].Env); i++ {
+		fmt.Printf("ENV print %#v", svmConfig.Spec.Containers[0].Env[i])
+		createEnv := svmConfig.Spec.Containers[0].Env[i].Name + "=" + svmConfig.Spec.Containers[0].Env[i].Value
+		ociEnv = append(ociEnv, createEnv)
+		fmt.Printf("Updated NOV16 req.OCI.Process.Env is %#v", ociEnv)
+	}
+	return ociEnv
+}
+
+func updateCwd(ociCwd string, ociJsonCwd string, svmConfig SVMConfig) string {
+	if svmConfig.Spec.Containers[0].Cwd != "" {
+		ociCwd = svmConfig.Spec.Containers[0].Cwd
+	} else {
+		ociCwd = ociJsonCwd
+	}
+	return ociCwd
+}
 
 func updateOCIReq(ociSpec *specs.Spec, req *pb.CreateContainerRequest, svmConfig SVMConfig) {
 	agentLog.Debug("Updating the OCI request")
@@ -768,22 +785,13 @@ func updateOCIReq(ociSpec *specs.Spec, req *pb.CreateContainerRequest, svmConfig
 		req.OCI.Process.Args = svmConfig.Spec.Containers[0].Args
 	}
 
-	req.OCI.Process.Env = append(req.OCI.Process.Env, ociJsonSpec.Process.Env...)
+	//	req.OCI.Process.Env = append(req.OCI.Process.Env, ociJsonSpec.Process.Env...)
 	if len(svmConfig.Spec.Containers[0].Env) != 0 {
-		for i := 0; i < len(svmConfig.Spec.Containers[0].Env); i++ {
-			fmt.Printf("ENV print %#v", svmConfig.Spec.Containers[0].Env[i])
-			createEnv := svmConfig.Spec.Containers[0].Env[i].Name + "=" + svmConfig.Spec.Containers[0].Env[i].Value
-			req.OCI.Process.Env = append(req.OCI.Process.Env, createEnv)
-			fmt.Printf("Updated NOV16 req.OCI.Process.Env is %#v", req.OCI.Process.Env)
-		}
+		req.OCI.Process.Env = updateEnv(req.OCI.Process.Env, ociJsonSpec.Process.Env, svmConfig)
 	}
 	fmt.Printf("FINAL Updated NOV16 req.OCI.Process.Env is %#v", req.OCI.Process.Env)
-	if svmConfig.Spec.Containers[0].Cwd != "" {
-		req.OCI.Process.Cwd = svmConfig.Spec.Containers[0].Cwd
-	} else {
-		req.OCI.Process.Cwd = ociJsonSpec.Process.Cwd
-	}
 
+	req.OCI.Process.Cwd = updateCwd(req.OCI.Process.Cwd, ociJsonSpec.Process.Cwd, svmConfig)
 	agentLog.Debug("Updated req.OCI.Process is")
 	spew.Dump(req.OCI.Process)
 
