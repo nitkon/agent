@@ -21,13 +21,11 @@ import (
 	"syscall"
 	"time"
 
-	b64 "encoding/base64"
-
 	"github.com/davecgh/go-spew/spew"
 	gpb "github.com/gogo/protobuf/types"
-	"github.com/kata-containers/agent/crypto"
 	"github.com/kata-containers/agent/pkg/types"
 	pb "github.com/kata-containers/agent/protocols/grpc"
+	sc "github.com/kata-containers/agent/securecontainers"
 	"github.com/opencontainers/runc/libcontainer"
 	"github.com/opencontainers/runc/libcontainer/configs"
 	"github.com/opencontainers/runc/libcontainer/seccomp"
@@ -76,6 +74,9 @@ var (
 	stopTracingCalled = false
 )
 
+var svmConfig sc.SVMConfig
+var ociJsonSpec = &specs.Spec{}
+
 type onlineResource struct {
 	sysfsOnlinePath string
 	regexpPattern   string
@@ -83,8 +84,6 @@ type onlineResource struct {
 
 type cookie map[string]bool
 
-var svmConfig SVMConfig
-var ociJsonSpec = &specs.Spec{}
 var emptyResp = &gpb.Empty{}
 
 const onlineCPUMemWaitTime = 100 * time.Millisecond
@@ -92,36 +91,6 @@ const onlineCPUMemWaitTime = 100 * time.Millisecond
 var onlineCPUMaxTries = uint32(100)
 
 const cpusetMode = 0644
-
-type SVMConfig struct {
-	Spec Spec `yaml:"spec"`
-}
-type Requests struct {
-	CPU    string `yaml:"cpu"`
-	Memory string `yaml:"memory"`
-}
-type Resources struct {
-	Requests Requests `yaml:"requests"`
-}
-type Env struct {
-	Name  string `yaml:"name"`
-	Value string `yaml:"value"`
-}
-type Ports struct {
-	ContainerPort int `yaml:"containerPort"`
-}
-type Containers struct {
-	Name      string    `yaml:"name"`
-	Image     string    `yaml:"image"`
-	Resources Resources `yaml:"resources"`
-	Args      []string  `yaml:"args"`
-	Env       []Env     `yaml:"env"`
-	Cwd       string    `yaml:"cwd"`
-	Ports     []Ports   `yaml:"ports"`
-}
-type Spec struct {
-	Containers []Containers `yaml:"containers"`
-}
 
 // handleError will log the specified error if wait is false
 func handleError(wait bool, err error) error {
@@ -466,11 +435,11 @@ func (a *agentGRPC) execProcess(ctr *container, proc *process, createContainer b
 
 		fmt.Printf("EXEC Before NOV1616 req.OCI.Process.Env is %#v", proc.process.Env)
 		if len(svmConfig.Spec.Containers[0].Env) != 0 {
-			proc.process.Env = updateEnv(proc.process.Env, ociJsonSpec.Process.Env, svmConfig)
+			proc.process.Env = sc.UpdateEnv(proc.process.Env, ociJsonSpec.Process.Env, svmConfig)
 		}
 		fmt.Printf("EXEC After NOV1616 req.OCI.Process.Env is %#v", proc.process.Env)
 
-		proc.process.Cwd = updateCwd(proc.process.Cwd, ociJsonSpec.Process.Cwd, svmConfig)
+		proc.process.Cwd = sc.UpdateCwd(proc.process.Cwd, ociJsonSpec.Process.Cwd, svmConfig)
 		/*
 			if svmConfig.Spec.Containers[0].Cwd != "" {
 				proc.process.Cwd = svmConfig.Spec.Containers[0].Cwd
@@ -479,7 +448,7 @@ func (a *agentGRPC) execProcess(ctr *container, proc *process, createContainer b
 			}
 		*/
 		ociJsonSpec = &specs.Spec{}
-		svmConfig = SVMConfig{}
+		svmConfig = sc.SVMConfig{}
 	}
 	// This lock is very important to avoid any race with reaper.reap().
 	// Indeed, if we don't lock this here, we could potentially get the
@@ -715,274 +684,6 @@ func (a *agentGRPC) finishCreateContainer(ctr *container, req *pb.CreateContaine
 	return emptyResp, a.postExecProcess(ctr, ctr.initProcess)
 }
 
-func readOciImageConfigJson(ociSpec *specs.Spec, req *pb.CreateContainerRequest) (*specs.Spec, error) {
-
-	configPath := filepath.Join(kataGuestSvmDir, req.ContainerId, "rootfs_bundle", "config.json")
-	agentLog.Debug("Reading configJSONBytes from %s", configPath)
-
-	_, err := os.Stat(configPath)
-	if err != nil {
-		agentLog.WithError(err).Errorf("ConfigPath does not exsists %s", configPath)
-		return ociJsonSpec, err
-	}
-
-	configJSONBytes, err := ioutil.ReadFile(configPath)
-	if err != nil {
-		agentLog.WithError(err).Errorf("Could not open OCI config file %s", configPath)
-		return ociJsonSpec, err
-	}
-
-	agentLog.Debug("Unmarshalling the data")
-	if err := json.Unmarshal(configJSONBytes, &ociJsonSpec); err != nil {
-		agentLog.WithError(err).Errorf("Could not unmarshall OCI config file")
-		return ociJsonSpec, err
-	}
-
-	agentLog.Debug("The unmarshalled ociJsonSpec is")
-	spew.Dump(ociJsonSpec)
-
-	return ociJsonSpec, nil
-}
-func updateEnv(ociEnv []string, ociJsonEnv []string, svmConfig SVMConfig) []string {
-	ociEnv = append(ociEnv, ociJsonEnv...)
-	for i := 0; i < len(svmConfig.Spec.Containers[0].Env); i++ {
-		fmt.Printf("ENV print %#v", svmConfig.Spec.Containers[0].Env[i])
-		createEnv := svmConfig.Spec.Containers[0].Env[i].Name + "=" + svmConfig.Spec.Containers[0].Env[i].Value
-		ociEnv = append(ociEnv, createEnv)
-		fmt.Printf("Updated NOV16 req.OCI.Process.Env is %#v", ociEnv)
-	}
-	return ociEnv
-}
-
-func updateCwd(ociCwd string, ociJsonCwd string, svmConfig SVMConfig) string {
-	if svmConfig.Spec.Containers[0].Cwd != "" {
-		ociCwd = svmConfig.Spec.Containers[0].Cwd
-	} else {
-		ociCwd = ociJsonCwd
-	}
-	return ociCwd
-}
-
-func updateOCIReq(ociSpec *specs.Spec, req *pb.CreateContainerRequest, svmConfig SVMConfig) {
-	agentLog.Debug("Updating the OCI request")
-	agentLog.WithField("svmConfig is: ", svmConfig).Debug("Before Updating the OCI Request")
-	spew.Dump(svmConfig)
-	agentLog.WithField("req.OCI.Process is: ", req.OCI.Process).Debug("Before Updating the OCI Request")
-	spew.Dump(req.OCI.Process)
-	agentLog.WithField("Container is: ", req.ContainerId).Debug("Before Updating the OCI Request")
-
-	ociJsonSpec, err := readOciImageConfigJson(ociSpec, req)
-	agentLog.Debug("ociJsonSpec is: ")
-	spew.Dump(ociJsonSpec)
-	if err != nil {
-		agentLog.WithError(err).Errorf("readOciImageConfigJson Errored out: %s", err)
-	}
-
-	// Give higher priority to args specified in the pod yaml in CM than json spec of the image
-	if len(svmConfig.Spec.Containers[0].Args) == 0 {
-		req.OCI.Process.Args = ociJsonSpec.Process.Args
-	} else {
-		req.OCI.Process.Args = svmConfig.Spec.Containers[0].Args
-	}
-
-	//	req.OCI.Process.Env = append(req.OCI.Process.Env, ociJsonSpec.Process.Env...)
-	if len(svmConfig.Spec.Containers[0].Env) != 0 {
-		req.OCI.Process.Env = updateEnv(req.OCI.Process.Env, ociJsonSpec.Process.Env, svmConfig)
-	}
-	fmt.Printf("FINAL Updated NOV16 req.OCI.Process.Env is %#v", req.OCI.Process.Env)
-
-	req.OCI.Process.Cwd = updateCwd(req.OCI.Process.Cwd, ociJsonSpec.Process.Cwd, svmConfig)
-	agentLog.Debug("Updated req.OCI.Process is")
-	spew.Dump(req.OCI.Process)
-
-}
-
-func createRuntimeBundle(ociSpec *specs.Spec, req *pb.CreateContainerRequest) error {
-
-	ociBundle := filepath.Join(kataGuestSvmDir, req.ContainerId, "rootfs_bundle")
-	ociImage := filepath.Join(kataGuestSvmDir, req.ContainerId, "rootfs_dir")
-
-	agentLog.WithField("ociImage is: ", ociImage).Debug("Creating runtime bundle")
-	agentLog.WithField("ociBundle is: ", ociBundle).Debug("Creating runtime bundle")
-
-	// Since image.CreateRuntimeBundleLayout is returning a nil pointer exception, os exec the oci-image-tool directly
-	cmd := exec.Command("oci-image-tool", "create", "--ref=platform.os=linux", ociImage, ociBundle)
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	if err != nil {
-		agentLog.WithField("ocibundle err: ", err).Debug("create oci bundle failed")
-	}
-
-	_, err = os.Stat(ociBundle)
-	if err != nil {
-		agentLog.WithError(err).Errorf("ociBundle does not exists: %s", ociBundle)
-		return err
-	} else {
-		agentLog.WithField("ociBundle: ", ociBundle).Debug("Created ociBundle successfully")
-	}
-
-	// Make ociBundle executable as some images need to execute .sh files at startup
-	cmd = exec.Command("chmod", "-R", "+x", ociBundle)
-	cmd.Stdout = &out
-	cmd.Stderr = &stderr
-
-	err = cmd.Run()
-	if err != nil {
-		agentLog.WithError(err).Errorf("chmod failed %s", err)
-		return err
-	}
-
-	return err
-}
-
-func persistDecryptedCM(containerId string, decryptedConfig []byte) error {
-
-	decryptCMFile := filepath.Join(kataGuestSvmDir, containerId, "decryptedConfig")
-	decryptCMDir := filepath.Join(kataGuestSvmDir, containerId)
-
-	agentLog.Debug("Create directory to write decrypted configmap into %s", decryptCMDir)
-	err := os.MkdirAll(decryptCMDir, os.ModeDir)
-	if err != nil {
-		return err
-	}
-
-	agentLog.Debug("Write decrypted configmap into %s file", decryptCMFile)
-	err = ioutil.WriteFile(decryptCMFile, decryptedConfig, 0644)
-	return err
-}
-
-//Find and Read configmap volume mounted into the scratch container rootfs
-func readEncryptedConfigmap(req *pb.CreateContainerRequest, vaultEnv []string) error {
-
-	var file string
-	for _, mounts := range req.OCI.Mounts {
-		if mounts.Destination == configmapMountPoint {
-			file = filepath.Join(mounts.Source, configmapFileName)
-			agentLog.Debug("Found encrypted configmap at %s", mounts.Source)
-			break
-		}
-	}
-
-	if len(file) == 0 {
-		return fmt.Errorf("No encrypted configmap found")
-	}
-
-	_, err := os.Stat(file)
-	if err != nil {
-		agentLog.WithError(err).Errorf("Unable to stat file %s err:%s", file, err)
-		return err
-	}
-	agentLog.WithField("ConfigMap path: ", file).Debug("Found file for reading config map")
-	yamlContainerSpec, err := ioutil.ReadFile(file)
-	if err != nil {
-		agentLog.WithError(err).Errorf("Could not read file %s: %s", file, err)
-		return err
-	}
-
-	containerspec, err := b64.StdEncoding.DecodeString(string(yamlContainerSpec)) //decoded into an encoded blob
-	if err != nil {
-		return err
-	}
-
-	key, nonce, err := crypto.GetCMDecryptionKey(vaultEnv)
-	if err != nil {
-		return err
-	}
-
-	decryptedConfig, err := crypto.DecryptSVMConfig(containerspec, key, nonce)
-	if err != nil {
-		return err
-	}
-
-	persistDecryptedCM(req.ContainerId, decryptedConfig)
-
-	err = yaml.Unmarshal(decryptedConfig, &svmConfig)
-	if err != nil {
-		agentLog.WithError(err).Errorf("Error unmarshalling yaml %s", err)
-		return err
-	}
-
-	return err
-
-}
-
-func pullOciImage(ociSpec *specs.Spec, svmConfig SVMConfig, req *pb.CreateContainerRequest) error {
-
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-
-	pull := skopeoSrcImageTransport + svmConfig.Spec.Containers[0].Image
-	create_dir := filepath.Join(kataGuestSvmDir, req.ContainerId, "rootfs_dir:latest")
-	destRefString := skopeoDestImageTransport + create_dir
-
-	err := os.MkdirAll(create_dir, os.ModeDir)
-	if err != nil {
-		agentLog.WithError(err).Errorf("Error creating directory %s %s", create_dir, err)
-		return err
-	}
-
-	cmd := exec.Command("skopeo", "copy", pull, destRefString)
-	cmd.Stdout = &out
-	cmd.Stderr = &stderr
-
-	err = cmd.Run()
-	if err != nil {
-		agentLog.WithError(err).Errorf("Error executing skopeo copy %s", err)
-		return err
-	}
-
-	return nil
-}
-
-func startSecureContainers(ociSpec *specs.Spec, req *pb.CreateContainerRequest) error {
-
-	err := readEncryptedConfigmap(req, ociSpec.Process.Env)
-	if err != nil {
-		agentLog.WithError(err).Errorf("readEncryptedConfigmap errored out: %s", err)
-		return err
-	}
-
-	err = pullOciImage(ociSpec, svmConfig, req)
-	if err != nil {
-		agentLog.WithError(err).Errorf("pullSecureImage errored out: %s", err)
-		return err
-	}
-
-	err = createRuntimeBundle(ociSpec, req)
-	if err != nil {
-		agentLog.WithError(err).Errorf("createRuntimeBundle errored out: %s", err)
-		return err
-	}
-
-	agentLog.WithField("req.OCI.Process.Args are:", req.OCI.Process.Args).Debug("Before updating OCI Request")
-	agentLog.WithField("svmConfig.Spec.Containers[0].Args", svmConfig.Spec.Containers[0].Args).Debug("Before updating OCI Request")
-	updateOCIReq(ociSpec, req, svmConfig)
-	agentLog.Debug("AFTER updateOCIReq req.OCI.Process is:")
-	spew.Dump(req.OCI.Process)
-
-	ociBundle := filepath.Join(kataGuestSvmDir, req.ContainerId, "rootfs_bundle")
-	ociSpec.Root.Path = filepath.Join(ociBundle, "rootfs")
-
-	return nil
-}
-
-func checkIfPauseContainer(ociSpec *specs.Spec) bool {
-
-	pause_args := "/pause"
-
-	for _, n := range ociSpec.Process.Args {
-		if len(ociSpec.Process.Args) == 1 && pause_args == n {
-			agentLog.Debug("It is a pause image")
-			return true
-		}
-	}
-
-	return false
-}
-
 func (a *agentGRPC) CreateContainer(ctx context.Context, req *pb.CreateContainerRequest) (resp *gpb.Empty, err error) {
 	if err := a.createContainerChecks(req); err != nil {
 		return emptyResp, err
@@ -1032,15 +733,13 @@ func (a *agentGRPC) CreateContainer(ctx context.Context, req *pb.CreateContainer
 
 	// Convert the spec to an actual OCI specification structure.
 	ociSpec, err := pb.GRPCtoOCI(req.OCI)
-	agentLog.Debug("Converted GRPC req to ociSPec: ")
-	spew.Dump(ociSpec)
 	//preserve ociSpec.Hostname
 
-	checkPause := checkIfPauseContainer(ociSpec)
+	checkPause := sc.CheckIfPauseContainer(ociSpec)
 
 	if checkPause != true {
 		agentLog.Debug("It is not a pause image. Starting secure containers")
-		err = startSecureContainers(ociSpec, req)
+		err = sc.StartSecureContainers(ociSpec, req)
 		if err != nil {
 			agentLog.WithError(err).Errorf("Error starting secure containers %s", err)
 			return emptyResp, err
