@@ -21,7 +21,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	gpb "github.com/gogo/protobuf/types"
 	"github.com/kata-containers/agent/pkg/types"
 	pb "github.com/kata-containers/agent/protocols/grpc"
@@ -46,12 +45,9 @@ type agentGRPC struct {
 
 // CPU and Memory hotplug
 const (
-	cpuRegexpPattern      = "cpu[0-9]*"
-	memRegexpPattern      = "memory[0-9]*"
-	libcontainerPath      = "/run/libcontainer"
-	configmapFileName     = "kavach.properties"
-	configmapJsonFileName = "config.json"
-	kataGuestSvmDir       = "/run/svm"
+	cpuRegexpPattern = "cpu[0-9]*"
+	memRegexpPattern = "memory[0-9]*"
+	libcontainerPath = "/run/libcontainer"
 )
 
 var (
@@ -61,10 +57,6 @@ var (
 	sysfsMemoryHotplugProbePath = "/sys/devices/system/memory/probe"
 	sysfsConnectedCPUsPath      = filepath.Join(sysfsCPUOnlinePath, "online")
 	containersRootfsPath        = "/run"
-	kataGuestSharedDir          = "/run/kata-containers/shared/containers"
-	skopeoSrcImageTransport     = "docker://" //Todo: Handle other registries as well
-	skopeoDestImageTransport    = "oci:"
-	configmapMountPoint         = "/etc/kavach"
 
 	// set when StartTracing() is called.
 	startTracingCalled = false
@@ -72,9 +64,6 @@ var (
 	// set when StopTracing() is called.
 	stopTracingCalled = false
 )
-
-var svmConfig sc.SVMConfig
-var ociJsonSpec = &specs.Spec{}
 
 type onlineResource struct {
 	sysfsOnlinePath string
@@ -411,7 +400,6 @@ func (a *agentGRPC) execProcess(ctr *container, proc *process, createContainer b
 	}
 
 	if createContainer != true {
-		fmt.Printf("HELLO NOV17")
 		proc.process.Env, proc.process.Cwd, err = sc.UpdateExecProcessConfig(ctr.id, proc.process.Env, proc.process.Cwd)
 		if err != nil {
 			return grpcStatus.Errorf(codes.Internal, "Could not update exec processes env and cwd: %v", err)
@@ -673,7 +661,7 @@ func (a *agentGRPC) CreateContainer(ctx context.Context, req *pb.CreateContainer
 	ociSpec, err := pb.GRPCtoOCI(req.OCI)
 	//preserve ociSpec.Hostname
 
-	checkPause := sc.CheckIfPauseContainer(ociSpec)
+	checkPause := sc.CheckIfPauseContainer(ociSpec.Process.Args)
 
 	if checkPause != true {
 		agentLog.Debug("It is not a pause image. Starting secure containers")
@@ -683,8 +671,6 @@ func (a *agentGRPC) CreateContainer(ctx context.Context, req *pb.CreateContainer
 			return emptyResp, err
 		}
 	}
-	agentLog.Debug("Started Secure Container. Updated req.OCI.Process is")
-	spew.Dump(req.OCI.Process)
 
 	if err != nil {
 		return emptyResp, err

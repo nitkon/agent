@@ -1,3 +1,9 @@
+//
+// Copyright (c) 2019 IBM
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 package securecontainers
 
 import (
@@ -10,7 +16,6 @@ import (
 	"path/filepath"
 
 	b64 "encoding/base64"
-	"github.com/davecgh/go-spew/spew"
 	"github.com/kata-containers/agent/crypto"
 	pb "github.com/kata-containers/agent/protocols/grpc"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -69,12 +74,12 @@ type Spec struct {
 	Containers []Containers `yaml:"containers"`
 }
 
-func CheckIfPauseContainer(ociSpec *specs.Spec) bool {
+func CheckIfPauseContainer(args []string) bool {
 
 	pause_args := "/pause"
 
-	for _, n := range ociSpec.Process.Args {
-		if len(ociSpec.Process.Args) == 1 && pause_args == n {
+	for _, n := range args {
+		if len(args) == 1 && pause_args == n {
 			agentLog.Debug("It is a pause image")
 			return true
 		}
