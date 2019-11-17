@@ -103,11 +103,7 @@ func StartSecureContainers(ociSpec *specs.Spec, req *pb.CreateContainerRequest) 
 		return err
 	}
 
-	agentLog.WithField("req.OCI.Process.Args are:", req.OCI.Process.Args).Debug("Before updating OCI Request")
-	agentLog.WithField("svmConfig.Spec.Containers[0].Args", svmConfig.Spec.Containers[0].Args).Debug("Before updating OCI Request")
 	updateOCIReq(ociSpec, req, svmConfig)
-	agentLog.Debug("AFTER updateOCIReq req.OCI.Process is:")
-	spew.Dump(req.OCI.Process)
 
 	ociBundle := filepath.Join(kataGuestSvmDir, req.ContainerId, "rootfs_bundle")
 	ociSpec.Root.Path = filepath.Join(ociBundle, "rootfs")
@@ -115,14 +111,14 @@ func StartSecureContainers(ociSpec *specs.Spec, req *pb.CreateContainerRequest) 
 	return nil
 }
 
-//Find and Read configmap volume mounted into the scratch container rootfs
+//Read encrypted configmap volume mounted into the scratch image.
 func readEncryptedConfigmap(req *pb.CreateContainerRequest, vaultEnv []string) error {
 
 	var file string
 	for _, mounts := range req.OCI.Mounts {
 		if mounts.Destination == configmapMountPoint {
 			file = filepath.Join(mounts.Source, configmapFileName)
-			agentLog.Debug("Found encrypted configmap at %s", mounts.Source)
+			agentLog.Debug("Found encrypted configmap at:", mounts.Source)
 			break
 		}
 	}
@@ -216,13 +212,13 @@ func persistDecryptedCM(containerId string, decryptedConfig []byte) error {
 	decryptCMFile := filepath.Join(kataGuestSvmDir, containerId, "decryptedConfig")
 	decryptCMDir := filepath.Join(kataGuestSvmDir, containerId)
 
-	agentLog.Debug("Create directory to write decrypted configmap into %s", decryptCMDir)
+	agentLog.Debug("Create directory to write decrypted configmap into: ", decryptCMDir)
 	err := os.MkdirAll(decryptCMDir, os.ModeDir)
 	if err != nil {
 		return err
 	}
 
-	agentLog.Debug("Write decrypted configmap into %s file", decryptCMFile)
+	agentLog.Debug("Write decrypted configmap into: ", decryptCMFile)
 	err = ioutil.WriteFile(decryptCMFile, decryptedConfig, 0644)
 	return err
 }
@@ -256,7 +252,6 @@ func pullOciImage(ociSpec *specs.Spec, svmConfig SVMConfig, req *pb.CreateContai
 }
 
 func UpdateExecProcessConfig(containerId string, processEnv []string, processCwd string) ([]string, string, error) {
-	fmt.Printf("Bye NOV 17")
 	decryptedConfig := filepath.Join(kataGuestSvmDir, containerId, "decryptedConfig")
 	data, err := ioutil.ReadFile(decryptedConfig)
 	err = yaml.Unmarshal(data, &svmConfig)
@@ -271,17 +266,9 @@ func UpdateExecProcessConfig(containerId string, processEnv []string, processCwd
 		return processEnv, processCwd, err
 	}
 
-	agentLog.Debug("ociJsonSpec is: ")
-	spew.Dump(ociJsonSpec)
-
-	agentLog.Debug("svmConfig is: ")
-	spew.Dump(svmConfig)
-
-	fmt.Printf("EXEC Before NOV1616 req.OCI.Process.Env is %#v", processEnv)
 	if len(svmConfig.Spec.Containers[0].Env) != 0 {
 		processEnv = UpdateEnv(processEnv, ociJsonSpec.Process.Env, svmConfig)
 	}
-	fmt.Printf("EXEC After NOV1616 req.OCI.Process.Env is %#v", processEnv)
 
 	processCwd = UpdateCwd(processCwd, ociJsonSpec.Process.Cwd, svmConfig)
 	ociJsonSpec = &specs.Spec{}
@@ -312,19 +299,14 @@ func ReadOciImageConfigJson(containerId string) (*specs.Spec, error) {
 		return ociJsonSpec, err
 	}
 
-	agentLog.Debug("The unmarshalled ociJsonSpec is")
-	spew.Dump(ociJsonSpec)
-
 	return ociJsonSpec, nil
 }
 
 func UpdateEnv(ociEnv []string, ociJsonEnv []string, svmConfig SVMConfig) []string {
 	ociEnv = append(ociEnv, ociJsonEnv...)
 	for i := 0; i < len(svmConfig.Spec.Containers[0].Env); i++ {
-		fmt.Printf("ENV print %#v", svmConfig.Spec.Containers[0].Env[i])
 		createEnv := svmConfig.Spec.Containers[0].Env[i].Name + "=" + svmConfig.Spec.Containers[0].Env[i].Value
 		ociEnv = append(ociEnv, createEnv)
-		fmt.Printf("Updated NOV16 req.OCI.Process.Env is %#v", ociEnv)
 	}
 	return ociEnv
 }
@@ -339,16 +321,8 @@ func UpdateCwd(ociCwd string, ociJsonCwd string, svmConfig SVMConfig) string {
 }
 
 func updateOCIReq(ociSpec *specs.Spec, req *pb.CreateContainerRequest, svmConfig SVMConfig) {
-	agentLog.Debug("Updating the OCI request")
-	agentLog.WithField("svmConfig is: ", svmConfig).Debug("Before Updating the OCI Request")
-	spew.Dump(svmConfig)
-	agentLog.WithField("req.OCI.Process is: ", req.OCI.Process).Debug("Before Updating the OCI Request")
-	spew.Dump(req.OCI.Process)
-	agentLog.WithField("Container is: ", req.ContainerId).Debug("Before Updating the OCI Request")
 
 	ociJsonSpec, err := ReadOciImageConfigJson(req.ContainerId)
-	agentLog.Debug("ociJsonSpec is: ")
-	spew.Dump(ociJsonSpec)
 	if err != nil {
 		agentLog.WithError(err).Errorf("readOciImageConfigJson Errored out: %s", err)
 	}
@@ -364,10 +338,7 @@ func updateOCIReq(ociSpec *specs.Spec, req *pb.CreateContainerRequest, svmConfig
 	if len(svmConfig.Spec.Containers[0].Env) != 0 {
 		req.OCI.Process.Env = UpdateEnv(req.OCI.Process.Env, ociJsonSpec.Process.Env, svmConfig)
 	}
-	fmt.Printf("FINAL Updated NOV16 req.OCI.Process.Env is %#v", req.OCI.Process.Env)
 
 	req.OCI.Process.Cwd = UpdateCwd(req.OCI.Process.Cwd, ociJsonSpec.Process.Cwd, svmConfig)
-	agentLog.Debug("Updated req.OCI.Process is")
-	spew.Dump(req.OCI.Process)
 
 }
