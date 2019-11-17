@@ -37,7 +37,6 @@ import (
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
 	grpcStatus "google.golang.org/grpc/status"
-	"gopkg.in/yaml.v2"
 )
 
 type agentGRPC struct {
@@ -412,44 +411,13 @@ func (a *agentGRPC) execProcess(ctr *container, proc *process, createContainer b
 	}
 
 	if createContainer != true {
-		agentLog.WithField("container id: ", ctr.id).Debug("ExecProcess, calling readEncryptedConfigmap")
-		decryptedConfig := filepath.Join(kataGuestSvmDir, ctr.id, "decryptedConfig")
-		data, err := ioutil.ReadFile(decryptedConfig)
-		err = yaml.Unmarshal(data, &svmConfig)
+		fmt.Printf("HELLO NOV17")
+		proc.process.Env, proc.process.Cwd, err = sc.UpdateExecProcessConfig(ctr.id, proc.process.Env, proc.process.Cwd)
 		if err != nil {
-			agentLog.WithError(err).Errorf("Error unmarshalling yaml while execing inside container %s", err)
-			return err
+			return grpcStatus.Errorf(codes.Internal, "Could not update exec processes env and cwd: %v", err)
 		}
-
-		err = readConfigJson(ctr.id)
-		if err != nil {
-			agentLog.WithError(err).Errorf("readConfigJson errored out: %s", err)
-			return err
-		}
-
-		agentLog.Debug("ociJsonSpec is: ")
-		spew.Dump(ociJsonSpec)
-
-		agentLog.Debug("svmConfig is: ")
-		spew.Dump(svmConfig)
-
-		fmt.Printf("EXEC Before NOV1616 req.OCI.Process.Env is %#v", proc.process.Env)
-		if len(svmConfig.Spec.Containers[0].Env) != 0 {
-			proc.process.Env = sc.UpdateEnv(proc.process.Env, ociJsonSpec.Process.Env, svmConfig)
-		}
-		fmt.Printf("EXEC After NOV1616 req.OCI.Process.Env is %#v", proc.process.Env)
-
-		proc.process.Cwd = sc.UpdateCwd(proc.process.Cwd, ociJsonSpec.Process.Cwd, svmConfig)
-		/*
-			if svmConfig.Spec.Containers[0].Cwd != "" {
-				proc.process.Cwd = svmConfig.Spec.Containers[0].Cwd
-			} else {
-				proc.process.Cwd = ociJsonSpec.Process.Cwd
-			}
-		*/
-		ociJsonSpec = &specs.Spec{}
-		svmConfig = sc.SVMConfig{}
 	}
+
 	// This lock is very important to avoid any race with reaper.reap().
 	// Indeed, if we don't lock this here, we could potentially get the
 	// SIGCHLD signal before the channel has been created, meaning we will
@@ -482,36 +450,6 @@ func (a *agentGRPC) execProcess(ctr *container, proc *process, createContainer b
 	a.sandbox.subreaper.setExitCodeCh(pid, proc.exitCodeCh)
 
 	return nil
-}
-
-//Find and Read configmap volume mounted into the scratch container rootfs
-func readConfigJson(containerId string) error {
-
-	file := filepath.Join(kataGuestSvmDir, containerId, "rootfs_bundle", "config.json")
-	_, err := os.Stat(file)
-	if err == nil {
-		agentLog.WithField("file: ", file).Debug("Found file for reading JSON config data")
-		configJSONBytes, err := ioutil.ReadFile(file)
-		if err != nil {
-			agentLog.WithError(err).Errorf("Could not read file %s: %s", file, err)
-			return err
-		}
-
-		agentLog.WithField("ociJsonSpec: ", ociJsonSpec).Debug("Before unmarshalling into ociJsonSpec")
-		err = json.Unmarshal(configJSONBytes, &ociJsonSpec)
-		agentLog.WithField("ociJsonSpec: ", ociJsonSpec).Debug("After unmarshalling into ociJsonSpec")
-		if err != nil {
-			agentLog.WithError(err).Errorf("Error unmarshalling ociJsonSpec %s", err)
-			return err
-		}
-
-	} else {
-		agentLog.WithError(err).Errorf("Unable to stat file %s err:%s", file, err)
-		return err
-	}
-	agentLog.Debug("Successfully found and read configmap")
-	return err
-
 }
 
 // Shared function between CreateContainer and ExecProcess, because those expect

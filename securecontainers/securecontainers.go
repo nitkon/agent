@@ -255,9 +255,43 @@ func pullOciImage(ociSpec *specs.Spec, svmConfig SVMConfig, req *pb.CreateContai
 	return nil
 }
 
-func readOciImageConfigJson(ociSpec *specs.Spec, req *pb.CreateContainerRequest) (*specs.Spec, error) {
+func UpdateExecProcessConfig(containerId string, processEnv []string, processCwd string) ([]string, string, error) {
+	fmt.Printf("Bye NOV 17")
+	decryptedConfig := filepath.Join(kataGuestSvmDir, containerId, "decryptedConfig")
+	data, err := ioutil.ReadFile(decryptedConfig)
+	err = yaml.Unmarshal(data, &svmConfig)
+	if err != nil {
+		agentLog.WithError(err).Errorf("Error unmarshalling yaml while execing inside container %s", err)
+		return processEnv, processCwd, err
+	}
 
-	configPath := filepath.Join(kataGuestSvmDir, req.ContainerId, "rootfs_bundle", "config.json")
+	ociJsonSpec, err = ReadOciImageConfigJson(containerId)
+	if err != nil {
+		agentLog.WithError(err).Errorf("readConfigJson errored out: %s", err)
+		return processEnv, processCwd, err
+	}
+
+	agentLog.Debug("ociJsonSpec is: ")
+	spew.Dump(ociJsonSpec)
+
+	agentLog.Debug("svmConfig is: ")
+	spew.Dump(svmConfig)
+
+	fmt.Printf("EXEC Before NOV1616 req.OCI.Process.Env is %#v", processEnv)
+	if len(svmConfig.Spec.Containers[0].Env) != 0 {
+		processEnv = UpdateEnv(processEnv, ociJsonSpec.Process.Env, svmConfig)
+	}
+	fmt.Printf("EXEC After NOV1616 req.OCI.Process.Env is %#v", processEnv)
+
+	processCwd = UpdateCwd(processCwd, ociJsonSpec.Process.Cwd, svmConfig)
+	ociJsonSpec = &specs.Spec{}
+	svmConfig = SVMConfig{}
+	return processEnv, processCwd, nil
+}
+
+func ReadOciImageConfigJson(containerId string) (*specs.Spec, error) {
+
+	configPath := filepath.Join(kataGuestSvmDir, containerId, "rootfs_bundle", "config.json")
 	agentLog.Debug("Reading configJSONBytes from %s", configPath)
 
 	_, err := os.Stat(configPath)
@@ -312,7 +346,7 @@ func updateOCIReq(ociSpec *specs.Spec, req *pb.CreateContainerRequest, svmConfig
 	spew.Dump(req.OCI.Process)
 	agentLog.WithField("Container is: ", req.ContainerId).Debug("Before Updating the OCI Request")
 
-	ociJsonSpec, err := readOciImageConfigJson(ociSpec, req)
+	ociJsonSpec, err := ReadOciImageConfigJson(req.ContainerId)
 	agentLog.Debug("ociJsonSpec is: ")
 	spew.Dump(ociJsonSpec)
 	if err != nil {
