@@ -41,7 +41,7 @@ var agentFields = logrus.Fields{
 
 var agentLog = logrus.WithFields(agentFields)
 var svmConfig SVMConfig
-var OciJsonSpec = &specs.Spec{}
+var ociJsonSpec = &specs.Spec{}
 var kataGuestSvmDir = "/run/svm"
 
 type SVMConfig struct {
@@ -95,13 +95,13 @@ func StartSecureContainers(ociSpec *specs.Spec, req *pb.CreateContainerRequest) 
 		return err
 	}
 
-	err = pullOciImage(ociSpec, svmConfig, req)
+	err = pullOciImage(svmConfig.Spec.Containers[0].Image, req.ContainerId)
 	if err != nil {
 		agentLog.WithError(err).Errorf("pullSecureImage errored out: %s", err)
 		return err
 	}
 
-	err = createRuntimeBundle(ociSpec, req)
+	err = createRuntimeBundle(req.ContainerId)
 	if err != nil {
 		agentLog.WithError(err).Errorf("createRuntimeBundle errored out: %s", err)
 		return err
@@ -208,14 +208,14 @@ func makeOCIBundleExecutable(ociBundle string) error {
 	return err
 }
 
-func createRuntimeBundle(ociSpec *specs.Spec, req *pb.CreateContainerRequest) error {
+func createRuntimeBundle(containerId string) error {
 
-	ociBundle := filepath.Join(kataGuestSvmDir, req.ContainerId, "rootfs_bundle")
-	ociImage := filepath.Join(kataGuestSvmDir, req.ContainerId, "rootfs_dir")
+	ociBundle := filepath.Join(kataGuestSvmDir, containerId, "rootfs_bundle")
+	ociImage := filepath.Join(kataGuestSvmDir, containerId, "rootfs_dir")
 
 	agentLog.WithField("rootfs_dir is: ", ociImage).Debug("Path to ociImage")
 	agentLog.WithField("rootfs_bundle is: ", ociBundle).Debug("Path to ociBundle")
-	agentLog.Debug("Create runtime bundle for container id:", req.ContainerId)
+	agentLog.Debug("Create runtime bundle for container id:", containerId)
 
 	// Since image.CreateRuntimeBundleLayout is returning a nil pointer exception, os exec the oci-image-tool directly
 	err := createOCIRuntimeBundle(ociImage, ociBundle)
@@ -257,13 +257,16 @@ func execCommand(binary string, args []string) error {
 	cmd.Stdout = &out
 	cmd.Stderr = &stderr
 	err := cmd.Run()
+	if err != nil {
+		agentLog.WithError(err).Errorf(" : %s", stderr.String())
+	}
 	return err
 }
 
-func pullOciImage(ociSpec *specs.Spec, svmConfig SVMConfig, req *pb.CreateContainerRequest) error {
+func pullOciImage(image string, containerId string) error {
 
-	pull := skopeoSrcImageTransport + svmConfig.Spec.Containers[0].Image
-	create_dir := filepath.Join(kataGuestSvmDir, req.ContainerId, "rootfs_dir:latest")
+	pull := skopeoSrcImageTransport + image
+	create_dir := filepath.Join(kataGuestSvmDir, containerId, "rootfs_dir:latest")
 	destRefString := skopeoDestImageTransport + create_dir
 
 	err := os.MkdirAll(create_dir, os.ModeDir)
@@ -272,7 +275,7 @@ func pullOciImage(ociSpec *specs.Spec, svmConfig SVMConfig, req *pb.CreateContai
 		return err
 	}
 
-	agentLog.Debug("Executing skopeo copy for containerId ", req.ContainerId)
+	agentLog.Debug("Executing skopeo copy for containerId ", containerId)
 	args := []string{"copy", pull, destRefString}
 	err = execCommand("skopeo", args)
 	if err != nil {
@@ -291,18 +294,18 @@ func UpdateExecProcessConfig(containerId string, processEnv []string, processCwd
 		return processEnv, processCwd, err
 	}
 
-	OciJsonSpec, err = readOciImageConfigJson(containerId)
+	ociJsonSpec, err = readOciImageConfigJson(containerId)
 	if err != nil {
 		agentLog.WithError(err).Errorf("readConfigJson errored out: %s", err)
 		return processEnv, processCwd, err
 	}
 
 	if len(svmConfig.Spec.Containers[0].Env) != 0 {
-		processEnv = UpdateEnv(processEnv, OciJsonSpec.Process.Env, svmConfig)
+		processEnv = updateEnv(processEnv, ociJsonSpec.Process.Env, svmConfig)
 	}
 
-	processCwd = UpdateCwd(processCwd, OciJsonSpec.Process.Cwd, svmConfig)
-	OciJsonSpec = &specs.Spec{}
+	processCwd = updateCwd(processCwd, ociJsonSpec.Process.Cwd, svmConfig.Spec.Containers[0].Cwd)
+	ociJsonSpec = &specs.Spec{}
 	svmConfig = SVMConfig{}
 	return processEnv, processCwd, nil
 }
@@ -326,26 +329,25 @@ func readOciImageConfigJson(containerId string) (*specs.Spec, error) {
 	err := fileExists(configPath)
 	if err != nil {
 		agentLog.WithError(err).Errorf("Error when looking for configPath %s", configPath)
-		return OciJsonSpec, err
+		return ociJsonSpec, err
 	}
 
 	configJSONBytes, err := ioutil.ReadFile(configPath)
 	if err != nil {
 		agentLog.WithError(err).Errorf("Could not open OCI config file %s", configPath)
-		return OciJsonSpec, err
+		return ociJsonSpec, err
 	}
 
 	agentLog.Debug("Unmarshalling the config json data from ", configPath)
-	if err := json.Unmarshal(configJSONBytes, &OciJsonSpec); err != nil {
+	if err := json.Unmarshal(configJSONBytes, &ociJsonSpec); err != nil {
 		agentLog.WithError(err).Errorf("Could not unmarshall OCI config file")
-		return OciJsonSpec, err
+		return ociJsonSpec, err
 	}
 
-	return OciJsonSpec, nil
+	return ociJsonSpec, nil
 }
 
-//UpdateEnv updates the exec process's environment variables
-func UpdateEnv(ociEnv []string, ociJsonEnv []string, svmConfig SVMConfig) []string {
+func updateEnv(ociEnv []string, ociJsonEnv []string, svmConfig SVMConfig) []string {
 	ociEnv = append(ociEnv, ociJsonEnv...)
 	for i := 0; i < len(svmConfig.Spec.Containers[0].Env); i++ {
 		createEnv := svmConfig.Spec.Containers[0].Env[i].Name + "=" + svmConfig.Spec.Containers[0].Env[i].Value
@@ -354,10 +356,9 @@ func UpdateEnv(ociEnv []string, ociJsonEnv []string, svmConfig SVMConfig) []stri
 	return ociEnv
 }
 
-//UpdateCwd to update the current working directory of the exec process
-func UpdateCwd(ociCwd string, ociJsonCwd string, svmConfig SVMConfig) string {
+func updateCwd(ociCwd string, ociJsonCwd string, svmConfigCwd string) string {
 	if svmConfig.Spec.Containers[0].Cwd != "" {
-		ociCwd = svmConfig.Spec.Containers[0].Cwd
+		ociCwd = svmConfigCwd
 	} else {
 		ociCwd = ociJsonCwd
 	}
@@ -366,22 +367,22 @@ func UpdateCwd(ociCwd string, ociJsonCwd string, svmConfig SVMConfig) string {
 
 func updateOCIReq(ociSpec *specs.Spec, req *pb.CreateContainerRequest, svmConfig SVMConfig) {
 
-	OciJsonSpec, err := readOciImageConfigJson(req.ContainerId)
+	ociJsonSpec, err := readOciImageConfigJson(req.ContainerId)
 	if err != nil {
 		agentLog.WithError(err).Errorf("readOciImageConfigJson Errored out: %s", err)
 	}
 
 	// Give higher priority to args specified in the pod yaml in CM than json spec of the image
 	if len(svmConfig.Spec.Containers[0].Args) == 0 {
-		req.OCI.Process.Args = OciJsonSpec.Process.Args
+		req.OCI.Process.Args = ociJsonSpec.Process.Args
 	} else {
 		req.OCI.Process.Args = svmConfig.Spec.Containers[0].Args
 	}
 
 	if len(svmConfig.Spec.Containers[0].Env) != 0 {
-		req.OCI.Process.Env = UpdateEnv(req.OCI.Process.Env, OciJsonSpec.Process.Env, svmConfig)
+		req.OCI.Process.Env = updateEnv(req.OCI.Process.Env, ociJsonSpec.Process.Env, svmConfig)
 	}
 
-	req.OCI.Process.Cwd = UpdateCwd(req.OCI.Process.Cwd, OciJsonSpec.Process.Cwd, svmConfig)
+	req.OCI.Process.Cwd = updateCwd(req.OCI.Process.Cwd, ociJsonSpec.Process.Cwd, svmConfig.Spec.Containers[0].Cwd)
 
 }
