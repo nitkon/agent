@@ -8,19 +8,18 @@ package securecontainers
 
 import (
 	"bytes"
-	"encoding/json"
-	"io/ioutil"
-	"os"
-	"os/exec"
-	"path/filepath"
-
 	b64 "encoding/base64"
+	"encoding/json"
 	"errors"
 	"github.com/kata-containers/agent/crypto"
 	pb "github.com/kata-containers/agent/protocols/grpc"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v2"
+	"io/ioutil"
+	"os"
+	"os/exec"
+	"path/filepath"
 )
 
 const (
@@ -40,8 +39,6 @@ var agentFields = logrus.Fields{
 }
 
 var agentLog = logrus.WithFields(agentFields)
-var svmConfig SVMConfig
-var ociJsonSpec = &specs.Spec{}
 var kataGuestSvmDir = "/run/svm"
 
 type SVMConfig struct {
@@ -76,7 +73,7 @@ type Spec struct {
 
 //IsPauseContainer checks if it is pause container
 func IsPauseContainer(args []string) bool {
-
+	//TODO: Handle infra pod incase of openshift
 	pause_args := "/pause"
 
 	if len(args) == 1 && pause_args == args[0] {
@@ -89,7 +86,9 @@ func IsPauseContainer(args []string) bool {
 //StartSecureContainers starts a secure container from an encrypted configmap inside a Kata VM
 func StartSecureContainers(ociSpec *specs.Spec, req *pb.CreateContainerRequest) error {
 
-	err := readEncryptedConfigmap(req, ociSpec.Process.Env)
+	var svmConfig SVMConfig
+	var ociJsonSpec = &specs.Spec{}
+	err := readEncryptedConfigmap(req, ociSpec.Process.Env, &svmConfig)
 	if err != nil {
 		agentLog.WithError(err).Errorf("readEncryptedConfigmap errored out: %s", err)
 		return err
@@ -107,7 +106,7 @@ func StartSecureContainers(ociSpec *specs.Spec, req *pb.CreateContainerRequest) 
 		return err
 	}
 
-	updateOCIReq(ociSpec, req, svmConfig)
+	updateOCIReq(ociSpec, req, svmConfig, ociJsonSpec)
 
 	ociBundle := filepath.Join(kataGuestSvmDir, req.ContainerId, "rootfs_bundle")
 	ociSpec.Root.Path = filepath.Join(ociBundle, "rootfs")
@@ -116,7 +115,7 @@ func StartSecureContainers(ociSpec *specs.Spec, req *pb.CreateContainerRequest) 
 }
 
 //Read encrypted configmap volume mounted into the scratch image.
-func readEncryptedConfigmap(req *pb.CreateContainerRequest, vaultEnv []string) error {
+func readEncryptedConfigmap(req *pb.CreateContainerRequest, vaultEnv []string, svmConfig *SVMConfig) error {
 
 	var file string
 
@@ -183,10 +182,12 @@ func createOCIRuntimeBundle(ociImage string, ociBundle string) error {
 
 	agentLog.Debug("Executing oci-image-tool to create OCI runtime bundle")
 	args := []string{"create", "--ref=platform.os=linux", ociImage, ociBundle}
-	err := execCommand("oci-image-tool", args)
+	err, errStr := execCommand("oci-image-tool", args)
 	if err != nil {
-		agentLog.WithField("ocibundle err: ", err).Debug("create oci bundle failed")
+		agentLog.WithField("ocibundle err: ", err).Debugf("create oci bundle failed %s", errStr)
 		return err
+	} else {
+		agentLog.Debug("Executed command, output: ", errStr)
 	}
 
 	err = fileExists(ociBundle)
@@ -201,9 +202,11 @@ func makeOCIBundleExecutable(ociBundle string) error {
 
 	agentLog.Debug("Executing chmod to make ociBundle executable")
 	args := []string{"-R", "+x", ociBundle}
-	err := execCommand("chmod", args)
+	err, errStr := execCommand("chmod", args)
 	if err != nil {
-		agentLog.WithError(err).Errorf("Failed to make OCI BUndle executable %s", err)
+		agentLog.WithError(err).Errorf("Failed to make OCI BUndle executable %s", errStr)
+	} else {
+		agentLog.Debug("Executed command, output: ", errStr)
 	}
 	return err
 }
@@ -249,18 +252,21 @@ func persistDecryptedCM(containerId string, decryptedConfig []byte) error {
 	return err
 }
 
-func execCommand(binary string, args []string) error {
+func execCommand(binary string, args []string) (error, string) {
 
 	var out bytes.Buffer
 	var stderr bytes.Buffer
+	var errString string
 	cmd := exec.Command(binary, args...)
 	cmd.Stdout = &out
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	if err != nil {
-		agentLog.WithError(err).Errorf(" : %s", stderr.String())
+		errString = stderr.String()
+	} else {
+		errString = out.String()
 	}
-	return err
+	return err, errString
 }
 
 func pullOciImage(image string, containerId string) error {
@@ -277,15 +283,20 @@ func pullOciImage(image string, containerId string) error {
 
 	agentLog.Debug("Executing skopeo copy for containerId ", containerId)
 	args := []string{"copy", pull, destRefString}
-	err = execCommand("skopeo", args)
+	err, errStr := execCommand("skopeo", args)
 	if err != nil {
-		agentLog.WithError(err).Errorf("Error executing skopeo copy %s", err)
+		agentLog.WithError(err).Errorf("Error executing skopeo copy %s", errStr)
+	} else {
+		agentLog.Debugf("Executed skopeo: %s", errStr)
 	}
 
-	return err
+	return nil
 }
 
 func UpdateExecProcessConfig(containerId string, processEnv []string, processCwd string) ([]string, string, error) {
+
+	var svmConfig SVMConfig
+	var ociJsonSpec = &specs.Spec{}
 	decryptedConfig := filepath.Join(kataGuestSvmDir, containerId, "decryptedConfig")
 	data, err := ioutil.ReadFile(decryptedConfig)
 	err = yaml.Unmarshal(data, &svmConfig)
@@ -294,7 +305,7 @@ func UpdateExecProcessConfig(containerId string, processEnv []string, processCwd
 		return processEnv, processCwd, err
 	}
 
-	ociJsonSpec, err = readOciImageConfigJson(containerId)
+	ociJsonSpec, err = readOciImageConfigJson(containerId, ociJsonSpec)
 	if err != nil {
 		agentLog.WithError(err).Errorf("readConfigJson errored out: %s", err)
 		return processEnv, processCwd, err
@@ -304,24 +315,21 @@ func UpdateExecProcessConfig(containerId string, processEnv []string, processCwd
 		processEnv = updateEnv(processEnv, ociJsonSpec.Process.Env, svmConfig)
 	}
 
-	processCwd = updateCwd(processCwd, ociJsonSpec.Process.Cwd, svmConfig.Spec.Containers[0].Cwd)
-	ociJsonSpec = &specs.Spec{}
-	svmConfig = SVMConfig{}
+	processCwd = updateCwd(processCwd, ociJsonSpec.Process.Cwd, svmConfig.Spec.Containers[0].Cwd, svmConfig)
 	return processEnv, processCwd, nil
 }
 
 func fileExists(path string) error {
 
-	var err error
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		agentLog.Debug("File does not exist", path)
+		return errors.New("File does not exist")
 	} else if err != nil {
-		agentLog.Debug("File may or may not exist", path)
+		return errors.New("File may or may not exist")
 	}
-	return err
+	return nil
 }
 
-func readOciImageConfigJson(containerId string) (*specs.Spec, error) {
+func readOciImageConfigJson(containerId string, ociJsonSpec *specs.Spec) (*specs.Spec, error) {
 
 	configPath := filepath.Join(kataGuestSvmDir, containerId, "rootfs_bundle", "config.json")
 	agentLog.Debug("Reading configJSONBytes from", configPath)
@@ -356,7 +364,7 @@ func updateEnv(ociEnv []string, ociJsonEnv []string, svmConfig SVMConfig) []stri
 	return ociEnv
 }
 
-func updateCwd(ociCwd string, ociJsonCwd string, svmConfigCwd string) string {
+func updateCwd(ociCwd string, ociJsonCwd string, svmConfigCwd string, svmConfig SVMConfig) string {
 	if svmConfig.Spec.Containers[0].Cwd != "" {
 		ociCwd = svmConfigCwd
 	} else {
@@ -365,9 +373,9 @@ func updateCwd(ociCwd string, ociJsonCwd string, svmConfigCwd string) string {
 	return ociCwd
 }
 
-func updateOCIReq(ociSpec *specs.Spec, req *pb.CreateContainerRequest, svmConfig SVMConfig) {
+func updateOCIReq(ociSpec *specs.Spec, req *pb.CreateContainerRequest, svmConfig SVMConfig, ociJsonSpec *specs.Spec) {
 
-	ociJsonSpec, err := readOciImageConfigJson(req.ContainerId)
+	ociJsonSpec, err := readOciImageConfigJson(req.ContainerId, ociJsonSpec)
 	if err != nil {
 		agentLog.WithError(err).Errorf("readOciImageConfigJson Errored out: %s", err)
 	}
@@ -383,6 +391,6 @@ func updateOCIReq(ociSpec *specs.Spec, req *pb.CreateContainerRequest, svmConfig
 		req.OCI.Process.Env = updateEnv(req.OCI.Process.Env, ociJsonSpec.Process.Env, svmConfig)
 	}
 
-	req.OCI.Process.Cwd = updateCwd(req.OCI.Process.Cwd, ociJsonSpec.Process.Cwd, svmConfig.Spec.Containers[0].Cwd)
+	req.OCI.Process.Cwd = updateCwd(req.OCI.Process.Cwd, ociJsonSpec.Process.Cwd, svmConfig.Spec.Containers[0].Cwd, svmConfig)
 
 }
