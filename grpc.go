@@ -665,9 +665,9 @@ func (a *agentGRPC) CreateContainer(ctx context.Context, req *pb.CreateContainer
 
 	if checkPause != true {
 		agentLog.Debug("It is not a pause image. Starting secure container with container id:", req.ContainerId)
-		err = sc.StartSecureContainers(ociSpec, req)
+		err = sc.UpdateSecureContainersOCIReq(ociSpec, req)
 		if err != nil {
-			agentLog.WithError(err).Errorf("Error starting secure container with container id: %s  error: %s", req.ContainerId, err)
+			agentLog.WithError(err).Errorf("Error updating secure container OCI request with container id: %s  error: %s", req.ContainerId, err)
 			return emptyResp, err
 		}
 	}

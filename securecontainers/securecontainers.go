@@ -84,11 +84,10 @@ func IsPauseContainer(args []string) bool {
 	return false
 }
 
-//StartSecureContainers starts a secure container from an encrypted configmap inside a Kata VM
-func StartSecureContainers(ociSpec *specs.Spec, req *pb.CreateContainerRequest) error {
+//UpdateSecureContainersOCIReq updates the OCI Request for a secure container from an encrypted configmap inside Kata VM
+func UpdateSecureContainersOCIReq(ociSpec *specs.Spec, req *pb.CreateContainerRequest) error {
 
-	var svmConfig SVMConfig
-	err := readEncryptedConfigmap(req, ociSpec.Process.Env, &svmConfig)
+	svmConfig, err := readEncryptedConfigmap(req, ociSpec.Process.Env)
 	if err != nil {
 		agentLog.WithError(err).Errorf("readEncryptedConfigmap errored out: %s", err)
 		return err
@@ -106,17 +105,21 @@ func StartSecureContainers(ociSpec *specs.Spec, req *pb.CreateContainerRequest) 
 		return err
 	}
 
-	updateOCIReq(ociSpec, req, svmConfig)
+	err = updateOCIReq(req, *svmConfig)
+	if err != nil {
+		agentLog.WithError(err).Errorf("updating OCI Request errored out: %s", err)
+		return err
+	}
 
-	ociBundle := filepath.Join(kataGuestSvmDir, req.ContainerId, "rootfs_bundle")
-	ociSpec.Root.Path = filepath.Join(ociBundle, "rootfs")
+	ociSpec.Root.Path = filepath.Join(kataGuestSvmDir, req.ContainerId, "rootfs_bundle", "rootfs")
 
 	return nil
 }
 
 //Read encrypted configmap volume mounted into the scratch image.
-func readEncryptedConfigmap(req *pb.CreateContainerRequest, vaultEnv []string, svmConfig *SVMConfig) error {
+func readEncryptedConfigmap(req *pb.CreateContainerRequest, vaultEnv []string) (*SVMConfig, error) {
 
+	var svmConfig SVMConfig
 	var file string
 
 	agentLog.Debug("Reading encrypted configmap for container:", req.ContainerId)
@@ -131,50 +134,50 @@ func readEncryptedConfigmap(req *pb.CreateContainerRequest, vaultEnv []string, s
 	if len(file) == 0 {
 		err := errors.New("No encrypted configmap found")
 		agentLog.WithError(err).Errorf("Error finding configmap")
-		return err
+		return nil, err
 	}
 
 	err := fileExists(file)
 	if err != nil {
 		agentLog.WithError(err).Errorf("Error looking for %s", file)
-		return err
+		return nil, err
 	}
 
 	agentLog.WithField("ConfigMap path: ", file).Debug("Found file for reading config map")
-	yamlContainerSpec, err := ioutil.ReadFile(file)
+	encryptedYamlContainerSpec, err := ioutil.ReadFile(file)
 	if err != nil {
 		agentLog.WithError(err).Errorf("Could not read file %s: %s", file, err)
-		return err
+		return nil, err
 	}
 
-	containerspec, err := b64.StdEncoding.DecodeString(string(yamlContainerSpec)) //decoded into an encoded blob
+	containerspec, err := b64.StdEncoding.DecodeString(string(encryptedYamlContainerSpec)) //decoded into an encoded blob
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	key, nonce, err := crypto.GetCMDecryptionKey(vaultEnv)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	decryptedConfig, err := crypto.DecryptSVMConfig(containerspec, key, nonce)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	err = persistDecryptedCM(req.ContainerId, decryptedConfig)
 	if err != nil {
 		agentLog.WithError(err).Errorf("Error when persisting decrypted configmap %s", err)
-		return err
+		return nil, err
 	}
 
 	err = yaml.Unmarshal(decryptedConfig, &svmConfig)
 	if err != nil {
 		agentLog.WithError(err).Errorf("Error unmarshalling yaml %s", err)
-		return err
+		return nil, err
 	}
 
-	return err
+	return &svmConfig, err
 
 }
 
@@ -272,15 +275,16 @@ func execCommand(binary string, args []string) (error, string) {
 func pullOciImage(image string, containerId string) error {
 
 	pull := skopeoSrcImageTransport + image
-	create_dir := filepath.Join(kataGuestSvmDir, containerId, "rootfs_dir:latest")
-	destRefString := skopeoDestImageTransport + create_dir
+	createDir := filepath.Join(kataGuestSvmDir, containerId, "rootfs_dir:latest")
+	destRefString := skopeoDestImageTransport + createDir
 
-	err := os.MkdirAll(create_dir, os.ModeDir)
+	err := os.MkdirAll(createDir, os.ModeDir)
 	if err != nil {
-		agentLog.WithError(err).Errorf("Error creating directory %s %s", create_dir, err)
+		agentLog.WithError(err).Errorf("Error creating directory %s %s", createDir, err)
 		return err
 	}
 
+	//ToDo: Add skopeo copy with authorization and via API.
 	agentLog.Debug("Executing skopeo copy for containerId ", containerId)
 	args := []string{"copy", pull, destRefString}
 	err, errStr := execCommand("skopeo", args)
@@ -334,12 +338,6 @@ func readOciImageConfigJson(containerId string) (*specs.Spec, error) {
 	configPath := filepath.Join(kataGuestSvmDir, containerId, "rootfs_bundle", "config.json")
 	agentLog.Debug("Reading configJSONBytes from", configPath)
 
-	err := fileExists(configPath)
-	if err != nil {
-		agentLog.WithError(err).Errorf("Error when looking for configPath %s", configPath)
-		return ociJsonSpec, err
-	}
-
 	configJSONBytes, err := ioutil.ReadFile(configPath)
 	if err != nil {
 		agentLog.WithError(err).Errorf("Could not open OCI config file %s", configPath)
@@ -373,11 +371,12 @@ func updateCwd(ociCwd string, ociJsonCwd string, svmConfigCwd string, svmConfig 
 	return ociCwd
 }
 
-func updateOCIReq(ociSpec *specs.Spec, req *pb.CreateContainerRequest, svmConfig SVMConfig) {
+func updateOCIReq(req *pb.CreateContainerRequest, svmConfig SVMConfig) error {
 
 	ociJsonSpec, err := readOciImageConfigJson(req.ContainerId)
 	if err != nil {
 		agentLog.WithError(err).Errorf("readOciImageConfigJson Errored out: %s", err)
+		return err
 	}
 
 	// Give higher priority to args specified in the pod yaml in CM than json spec of the image
@@ -392,5 +391,5 @@ func updateOCIReq(ociSpec *specs.Spec, req *pb.CreateContainerRequest, svmConfig
 	}
 
 	req.OCI.Process.Cwd = updateCwd(req.OCI.Process.Cwd, ociJsonSpec.Process.Cwd, svmConfig.Spec.Containers[0].Cwd, svmConfig)
-
+	return nil
 }
