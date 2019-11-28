@@ -20,7 +20,7 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
-func TestReadOciImageConfigJson(t *testing.T) {
+func TestReadOciImageConfigJSON(t *testing.T) {
 
 	tempDir, err := ioutil.TempDir("", "")
 	if err != nil {
@@ -28,32 +28,32 @@ func TestReadOciImageConfigJson(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
-	containerId := "123456"
+	containerID := "123456"
 	kataGuestSvmDir = tempDir
-	configJson := `{"ociVersion":"1.0.0","process":{"terminal":true,"user":{"uid":0,"gid":0},"args":["nginx","-g","daemon off;"],"env":["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin","NGINX_VERSION=1.17.5","NJS_VERSION=0.3.6","PKG_RELEASE=1~buster"],"cwd":"/"},"root":{"path":"rootfs"},"linux":{}}`
-	testOciJsonSpec := &specs.Spec{}
-	ociJsonSpec := &specs.Spec{}
+	configJSON := `{"ociVersion":"1.0.0","process":{"terminal":true,"user":{"uid":0,"gid":0},"args":["nginx","-g","daemon off;"],"env":["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin","NGINX_VERSION=1.17.5","NJS_VERSION=0.3.6","PKG_RELEASE=1~buster"],"cwd":"/"},"root":{"path":"rootfs"},"linux":{}}`
+	testOciJSONSpec := &specs.Spec{}
+	ociJSONSpec := &specs.Spec{}
 
-	d1 := []byte(configJson)
-	configPathrootfs := filepath.Join(kataGuestSvmDir, containerId, "rootfs_bundle")
+	d1 := []byte(configJSON)
+	configPathrootfs := filepath.Join(kataGuestSvmDir, containerID, "rootfs_bundle")
 	err = os.MkdirAll(configPathrootfs, os.ModeDir)
 	if err != nil {
 		t.Errorf("Error creating directory: %v", err)
 	}
 
-	configPath := filepath.Join(kataGuestSvmDir, containerId, "rootfs_bundle", "config.json")
+	configPath := filepath.Join(kataGuestSvmDir, containerID, "rootfs_bundle", "config.json")
 	err = ioutil.WriteFile(configPath, d1, 0644)
 	if err != nil {
 		t.Errorf("Failed to write oci image config json")
 	}
 
-	ociJsonSpec, err = readOciImageConfigJson(containerId)
+	ociJSONSpec, err = readOciImageConfigJSON(containerID)
 	if err != nil {
 		t.Errorf("Failed to read oci image config json")
 	}
 
-	json.Unmarshal(d1, &testOciJsonSpec)
-	if !reflect.DeepEqual(ociJsonSpec, testOciJsonSpec) {
+	json.Unmarshal(d1, &testOciJSONSpec)
+	if !reflect.DeepEqual(ociJSONSpec, testOciJSONSpec) {
 		t.Errorf("Failed to correctly read oci image config json")
 	}
 }
@@ -67,7 +67,7 @@ func TestPersistDecryptedCM(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	kataGuestSvmDir = tempDir
-	containerId := "123456"
+	containerID := "123456"
 	decryptedConfig := `spec:
   containers:
   - env:
@@ -81,11 +81,11 @@ func TestPersistDecryptedCM(t *testing.T) {
     - containerPort: 80
     resources: {}`
 	decryptedConfigByte := []byte(decryptedConfig)
-	err = persistDecryptedCM(containerId, decryptedConfigByte)
+	err = persistDecryptedCM(containerID, decryptedConfigByte)
 	if err != nil {
 		t.Errorf("Error creating directory: %v", err)
 	}
-	decryptFile := filepath.Join(kataGuestSvmDir, containerId, "decryptedConfig")
+	decryptFile := filepath.Join(kataGuestSvmDir, containerID, "decryptedConfig")
 	dat, err := ioutil.ReadFile(decryptFile)
 	if err != nil {
 		t.Errorf("Failed reading config map")
@@ -106,20 +106,20 @@ func TestPullOciImage(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	kataGuestSvmDir = tempDir
-	containerId := "123456"
+	containerID := "123456"
 	image := "nginx"
-	create_dir := filepath.Join(kataGuestSvmDir, containerId, "rootfs_dir")
-	destRefString := skopeoDestImageTransport + create_dir
+	createDir := filepath.Join(kataGuestSvmDir, containerID, "rootfs_dir")
+	destRefString := skopeoDestImageTransport + createDir
 
-	err = testSkopeoCopy(image, containerId)
+	err = testSkopeoCopy(image, containerID)
 	if err != nil {
 		t.Errorf("Error exeuting skopeo copy to pull oci image: %v", err)
 	}
 
 	// Three files should get created: blobs, index.json, oci-layout
-	files, err := ioutil.ReadDir(create_dir)
+	files, err := ioutil.ReadDir(createDir)
 	if err != nil {
-		t.Errorf("Failed reading directory %s", create_dir)
+		t.Errorf("Failed reading directory %s", createDir)
 	}
 
 	if len(files) != 3 {
@@ -135,14 +135,14 @@ func TestIsPauseContainer(t *testing.T) {
 	}
 }
 
-func testSkopeoCopy(image string, containerId string) error {
+func testSkopeoCopy(image string, containerID string) error {
 
 	_, err := exec.LookPath("skopeo")
 	if err != nil {
 		return errors.New("Skipping test as skopeo binary not present")
 	}
 
-	err = pullOciImage(image, containerId)
+	err = pullOciImage(image, containerID)
 	return err
 
 }
@@ -155,15 +155,15 @@ func TestCreateRuntimeBundle(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	kataGuestSvmDir = tempDir
-	containerId := "123456"
+	containerID := "123456"
 	image := "nginx"
-	ociBundle := filepath.Join(kataGuestSvmDir, containerId, "rootfs_bundle")
-	err = testSkopeoCopy(image, containerId)
+	ociBundle := filepath.Join(kataGuestSvmDir, containerID, "rootfs_bundle")
+	err = testSkopeoCopy(image, containerID)
 	if err != nil {
 		t.Errorf("Error exeuting skopeo copy to pull oci image: %v", err)
 	}
 
-	err = createRuntimeBundle(containerId)
+	err = createRuntimeBundle(containerID)
 	if err != nil {
 		t.Errorf("Error creating runtime bundle: %v", err)
 	}
@@ -186,14 +186,14 @@ func TestFailRuntimeBundleCreation(t *testing.T) {
 	}
 
 	kataGuestSvmDir = tempDir
-	containerId := "123456"
+	containerID := "123456"
 	image := "nginx"
-	err = testSkopeoCopy(image, containerId)
+	err = testSkopeoCopy(image, containerID)
 	if err != nil {
 		t.Errorf("Error exeuting skopeo copy to pull oci image: %v", err)
 	}
 	os.RemoveAll(tempDir)
-	err = createRuntimeBundle(containerId)
+	err = createRuntimeBundle(containerID)
 	if err == nil {
 		t.Errorf("Creating runtime bundle should have errored out")
 	}
