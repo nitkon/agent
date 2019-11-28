@@ -44,33 +44,33 @@ var agentLog = logrus.WithFields(agentFields)
 var kataGuestSvmDir = "/run/svm"
 
 type SVMConfig struct {
-	Spec Spec `yaml:"spec"`
+	Spec spec `yaml:"spec"`
 }
-type Requests struct {
+type requests struct {
 	CPU    string `yaml:"cpu"`
 	Memory string `yaml:"memory"`
 }
-type Resources struct {
-	Requests Requests `yaml:"requests"`
+type resources struct {
+	Requests requests `yaml:"requests"`
 }
-type Env struct {
+type env struct {
 	Name  string `yaml:"name"`
 	Value string `yaml:"value"`
 }
-type Ports struct {
+type ports struct {
 	ContainerPort int `yaml:"containerPort"`
 }
-type Containers struct {
+type containers struct {
 	Name      string    `yaml:"name"`
 	Image     string    `yaml:"image"`
-	Resources Resources `yaml:"resources"`
+	Resources resources `yaml:"resources"`
 	Args      []string  `yaml:"args"`
-	Env       []Env     `yaml:"env"`
+	Env       []env     `yaml:"env"`
 	Cwd       string    `yaml:"cwd"`
-	Ports     []Ports   `yaml:"ports"`
+	Ports     []ports   `yaml:"ports"`
 }
-type Spec struct {
-	Containers []Containers `yaml:"containers"`
+type spec struct {
+	Containers []containers `yaml:"containers"`
 }
 
 //IsPauseContainer checks if it is pause container
