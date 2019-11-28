@@ -43,7 +43,7 @@ var agentFields = logrus.Fields{
 var agentLog = logrus.WithFields(agentFields)
 var kataGuestSvmDir = "/run/svm"
 
-type SVMConfig struct {
+type svmConfig struct {
 	Spec spec `yaml:"spec"`
 }
 type requests struct {
@@ -118,9 +118,9 @@ func UpdateSecureContainersOCIReq(ociSpec *specs.Spec, req *pb.CreateContainerRe
 }
 
 //Read encrypted configmap volume mounted into the scratch image.
-func readEncryptedConfigmap(req *pb.CreateContainerRequest, vaultEnv []string) (*SVMConfig, error) {
+func readEncryptedConfigmap(req *pb.CreateContainerRequest, vaultEnv []string) (*svmConfig, error) {
 
-	var svmConfig SVMConfig
+	var svmConfig svmConfig
 	var file string
 
 	agentLog.Debug("Reading encrypted configmap for container:", req.ContainerId)
@@ -286,7 +286,7 @@ func pullOciImage(image string, containerID string) error {
 //UpdateExecProcessConfig updates the Exec process env and cwd attributes
 func UpdateExecProcessConfig(containerID string, processEnv []string, processCwd string) ([]string, string, error) {
 
-	var svmConfig SVMConfig
+	var svmConfig svmConfig
 	decryptedConfig := filepath.Join(kataGuestSvmDir, containerID, "decryptedConfig")
 	data, err := ioutil.ReadFile(decryptedConfig)
 	err = yaml.Unmarshal(data, &svmConfig)
@@ -340,7 +340,7 @@ func readOciImageConfigJSON(containerID string) (*specs.Spec, error) {
 	return ociJSONSpec, nil
 }
 
-func updateEnv(ociEnv []string, ociJSONEnv []string, svmConfig SVMConfig) []string {
+func updateEnv(ociEnv []string, ociJSONEnv []string, svmConfig svmConfig) []string {
 	ociEnv = append(ociEnv, ociJSONEnv...)
 	for i := 0; i < len(svmConfig.Spec.Containers[0].Env); i++ {
 		createEnv := svmConfig.Spec.Containers[0].Env[i].Name + "=" + svmConfig.Spec.Containers[0].Env[i].Value
@@ -349,7 +349,7 @@ func updateEnv(ociEnv []string, ociJSONEnv []string, svmConfig SVMConfig) []stri
 	return ociEnv
 }
 
-func updateCwd(ociCwd string, ociJSONCwd string, svmConfigCwd string, svmConfig SVMConfig) string {
+func updateCwd(ociCwd string, ociJSONCwd string, svmConfigCwd string, svmConfig svmConfig) string {
 	if svmConfig.Spec.Containers[0].Cwd != "" {
 		ociCwd = svmConfigCwd
 	} else {
@@ -358,7 +358,7 @@ func updateCwd(ociCwd string, ociJSONCwd string, svmConfigCwd string, svmConfig 
 	return ociCwd
 }
 
-func updateOCIReq(req *pb.CreateContainerRequest, svmConfig SVMConfig) error {
+func updateOCIReq(req *pb.CreateContainerRequest, svmConfig svmConfig) error {
 
 	ociJSONSpec, err := readOciImageConfigJSON(req.ContainerId)
 	if err != nil {
